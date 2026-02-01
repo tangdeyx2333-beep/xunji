@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="">
+  <head>
+    <meta charset="UTF-8">
+    <link rel="icon" href="/favicon.ico">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vite App</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+  <style>
+    /* src/assets/main.css */
+
+/* 1. 强力重置盒模型：所有元素的 padding 和 border 都算在 width 里面 */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+/* 2. 核心修复：消灭 Body 滚动条 */
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden; /* ★ 关键：禁止浏览器窗口出现滚动条 */
+  background-color: #ffffff; /* 防止出现白色缝隙 */
+}
+
+/* 3. 确保 Vue 根节点也是全屏的 */
+#app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden; /* 双重保险 */
+}
+  </style>
+</html>

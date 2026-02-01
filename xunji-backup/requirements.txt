@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+langchain
+langchain-community
+langchain-openai
+langchain_redis
+langchain_text_splitters
+langchain_core
+langchain_tavily
+langchain_google_genai
+langchain_chroma
+pypdf
+tiktoken
+python-dotenv
+langchain-ollama
+sqlalchemy
