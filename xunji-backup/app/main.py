@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.endpoints import chat, upload, retrieval, history, auth, models
+from app.api.endpoints import chat, upload, retrieval, history, auth, models, attachments, instructions
 from app.db.session import init_db
 
 
@@ -33,8 +33,10 @@ app.include_router(chat.router, prefix="/api", tags=["Chat"])
 app.include_router(upload.router, prefix="/api", tags=["Upload/File"]) # Upload 里现在也有查询接口了
 app.include_router(retrieval.router, prefix="/api", tags=["Retrieval/Debug"])
 app.include_router(history.router, prefix="/api", tags=["History/Session"]) # 获取消息
+app.include_router(attachments.router, prefix="/api", tags=["Attachments"]) # 附件签名URL
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"]) # ★ 注册
 app.include_router(models.router, prefix="/api", tags=["Models"]) # ★ 模型管理
+app.include_router(instructions.router, prefix="/api", tags=["Instructions"]) # ★ AI 指令
 # 4. 根路径测试
 @app.get("/")
 def root():

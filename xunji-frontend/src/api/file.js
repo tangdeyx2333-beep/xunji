@@ -21,3 +21,18 @@ export function uploadFile(formData) {
     }
   })
 }
+
+export function deleteFile(fileId) {
+  return request({
+    url: `/api/files/${fileId}`,
+    method: 'delete'
+  })
+}
+
+export function clearKnowledgeBase() {
+  return request({
+    url: '/api/knowledge-base/clear',
+    method: 'post',
+    data: { confirm: true }
+  })
+}

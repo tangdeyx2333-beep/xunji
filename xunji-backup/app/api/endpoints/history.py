@@ -1,12 +1,12 @@
 from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 from datetime import datetime
 
 from app.db.session import get_db
-from app.models.sql_models import Conversation, Message, TreeNode
+from app.models.sql_models import Conversation, Message, TreeNode, MessageAttachment
 
 router = APIRouter()
 
@@ -30,6 +30,7 @@ class MessageDTO(BaseModel):
     type: str
     node_id: Optional[str] = None # 新增节点ID
     parent_node_id: Optional[str] = None # 新增父节点ID
+    attachments: List[Dict[str, Any]] = []
 
     class Config:
         from_attributes = True
@@ -74,13 +75,32 @@ async def get_messages(
         .filter(Message.conversation_id == conversation_id) \
         .order_by(Message.created_at.asc()) \
         .all()
+    message_ids = [msg.id for msg, _, _ in results]
+    attachments = db.query(MessageAttachment).filter(MessageAttachment.message_id.in_(message_ids)).all() if message_ids else []
+    attachments_map = {}
+    for a in attachments:
+        attachments_map.setdefault(a.message_id, []).append({
+            "id": a.id,
+            "filename": a.filename,
+            "mime": a.mime,
+            "size": a.size,
+            "storage_provider": a.storage_provider,
+            "storage_key": a.storage_key,
+        })
     
     # 构造 DTO
     messages_dto = []
     for msg, node_id, parent_node_id in results:
-        dto = MessageDTO.model_validate(msg)
-        dto.node_id = node_id
-        dto.parent_node_id = parent_node_id
+        dto = MessageDTO(
+            id=msg.id,
+            role=msg.role,
+            content=msg.content,
+            created_at=msg.created_at,
+            type=msg.type,
+            node_id=node_id,
+            parent_node_id=parent_node_id,
+            attachments=attachments_map.get(msg.id, []),
+        )
         messages_dto.append(dto)
 
     return messages_dto
@@ -142,6 +162,18 @@ async def get_node_path(node_id: str, db: Session = Depends(get_db)):
     """)
     
     results = db.execute(recursive_query, {"target_id": node_id}).fetchall()
+    message_ids = [row.id for row in results]
+    attachments = db.query(MessageAttachment).filter(MessageAttachment.message_id.in_(message_ids)).all() if message_ids else []
+    attachments_map = {}
+    for a in attachments:
+        attachments_map.setdefault(a.message_id, []).append({
+            "id": a.id,
+            "filename": a.filename,
+            "mime": a.mime,
+            "size": a.size,
+            "storage_provider": a.storage_provider,
+            "storage_key": a.storage_key,
+        })
     
     # 构造返回
     path_messages = []
@@ -157,6 +189,7 @@ async def get_node_path(node_id: str, db: Session = Depends(get_db)):
             node_id=row.node_id,
             parent_node_id=row.parent_node_id
         )
+        dto.attachments = attachments_map.get(row.id, [])
         path_messages.append(dto)
         
     return path_messages

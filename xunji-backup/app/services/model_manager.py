@@ -9,12 +9,27 @@ load_dotenv()
 
 class ModelManager:
     _instance = None
+    
+    # ★★★ 多模态配置 ★★★
+    MULTIMODAL_CONFIG = {
+        "supported_models": ["kimi", "moonshot", "gpt-4-vision", "gpt-4o", "gemini"], # 支持多模态的模型前缀
+        "modalities": ["image", "video"]
+    }
 
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super(ModelManager, cls).__new__(cls)
             cls._instance.models = {}  # 缓存已初始化的模型
         return cls._instance
+
+    def is_multimodal_supported(self, model_name: str) -> bool:
+        """
+        检查模型是否支持多模态
+        """
+        for prefix in self.MULTIMODAL_CONFIG["supported_models"]:
+            if model_name.startswith(prefix):
+                return True
+        return False
 
     def get_model(self, model_name: str) -> Any:
         """

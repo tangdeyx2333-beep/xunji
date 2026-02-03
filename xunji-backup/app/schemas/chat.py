@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 # 接收前端的请求数据
 class ChatRequest(BaseModel):
@@ -11,6 +11,10 @@ class ChatRequest(BaseModel):
     file_ids: List[str] = []
     conversation_id: Optional[str] = None # 会话ID (第一次对话可能为空)
     parent_id: Optional[str] = None       # 父节点ID (用于树状对话)
+    
+    # ★★★ 新增：即时聊天文件 (支持多模态) ★★★
+    # 格式示例: [{"name": "a.png", "type": "image", "base64": "...", "size": 1024}]
+    files: List[Dict[str, Any]] = []
 
 # 接收前端的文件数据
 

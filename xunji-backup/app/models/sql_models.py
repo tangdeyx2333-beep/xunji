@@ -77,6 +77,7 @@ class Message(Base):
 
     # 关联关系
     conversation = relationship("Conversation", back_populates="messages")
+    attachments = relationship("MessageAttachment", back_populates="message", cascade="all, delete-orphan")
 
 
 # --- 4. 文档表 (FileRecord) ---
@@ -143,3 +144,40 @@ class ModelConfig(Base):
     
     # 关联
     user = relationship("User")
+
+
+class AiInstruction(Base):
+    __tablename__ = "ai_instructions"
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False)
+
+    content = Column(Text, nullable=False)
+    sort_order = Column(Integer, default=0)
+
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    is_deleted = Column(Boolean, default=False)
+
+    user = relationship("User")
+
+
+class MessageAttachment(Base):
+    __tablename__ = "message_attachments"
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    conversation_id = Column(String, ForeignKey("conversations.id"))
+    message_id = Column(String, ForeignKey("messages.id"))
+    user_id = Column(String, ForeignKey("users.id"), nullable=True)
+
+    filename = Column(String, nullable=False)
+    mime = Column(String, default="")
+    size = Column(Integer, default=0)
+
+    storage_provider = Column(String, default="cos")
+    storage_key = Column(String, nullable=False)
+    url = Column(String, nullable=False)
+
+    created_at = Column(DateTime, default=datetime.now)
+
+    message = relationship("Message", back_populates="attachments")

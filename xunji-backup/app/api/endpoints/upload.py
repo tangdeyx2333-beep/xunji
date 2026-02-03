@@ -1,6 +1,6 @@
 import shutil
 import uuid
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 
 from dotenv import load_dotenv
@@ -40,6 +40,10 @@ class FileDTO(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class ClearKnowledgeBaseRequest(BaseModel):
+    confirm: bool = False
 
 
 # --- 接口 1 文件上传接口 ---
@@ -98,8 +102,11 @@ async def upload_file(file: UploadFile = File(...),
         # 注意：这里直接传 file 对象给 service
         file_id = rag_service.process_uploaded_file(file, file.filename)
 
-         # 将上传的文件储存到本地
-        file_path, size = save_file(file, f"{file_id}{os.getenv("SPLIT_FILENAME_ID")}{file.filename}")
+        split_filename_id = os.getenv("SPLIT_FILENAME_ID")
+        if not split_filename_id:
+            raise HTTPException(status_code=500, detail="未配置环境变量 SPLIT_FILENAME_ID")
+
+        file_path, size = save_file(file, f"{file_id}{split_filename_id}{file.filename}")
 
         # 3. ★ 新增：将文件记录写入 SQL 数据库 ★
         new_file = FileRecord(
@@ -143,7 +150,11 @@ async def get_files(
 
 # --- 接口 3: 删除文件 (同时删数据库和 Chroma) ---
 @router.delete("/files/{file_id}")
-async def delete_file(file_id: str, db: Session = Depends(get_db)):
+async def delete_file(
+        file_id: str,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+):
     """
     删除文件：
     1. 标记数据库为删除
@@ -152,12 +163,63 @@ async def delete_file(file_id: str, db: Session = Depends(get_db)):
     file_record = db.query(FileRecord).filter(FileRecord.id == file_id).first()
     if not file_record:
         raise HTTPException(status_code=404, detail="文件不存在")
+    if file_record.user_id and file_record.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="无权限删除该文件")
 
     # 1. 软删除 SQL
     file_record.is_deleted = True
     db.commit()
 
-    # 2. 从 Chroma 删除 (需要 rag_service 支持，暂时可以先不做，不影响流程)
-    # rag_service.delete_doc(file_id)
+    rag_service.delete_doc(file_id)
+
+    split_filename_id = os.getenv("SPLIT_FILENAME_ID")
+    if split_filename_id:
+        try:
+            base_dir = file_record.file_path or os.getenv("RAG_FILE_PATH") or ""
+            if base_dir:
+                maybe_path = os.path.join(base_dir, f"{file_id}{split_filename_id}{file_record.filename}")
+                if os.path.exists(maybe_path):
+                    os.remove(maybe_path)
+        except Exception:
+            pass
 
     return {"message": "文件已移除"}
+
+
+@router.post("/knowledge-base/clear")
+async def clear_knowledge_base(
+        payload: ClearKnowledgeBaseRequest,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+):
+    if not payload.confirm:
+        raise HTTPException(status_code=400, detail="confirm=true 才会执行清空操作")
+
+    files = (
+        db.query(FileRecord)
+        .filter(FileRecord.is_deleted == False)
+        .filter(FileRecord.user_id == current_user.id)
+        .all()
+    )
+    file_ids = [f.id for f in files]
+
+    for f in files:
+        f.is_deleted = True
+    db.commit()
+
+    rag_service.delete_docs(file_ids)
+
+    split_filename_id = os.getenv("SPLIT_FILENAME_ID")
+    if split_filename_id:
+        for f in files:
+            try:
+                base_dir = f.file_path or os.getenv("RAG_FILE_PATH") or ""
+                if not base_dir:
+                    continue
+                maybe_path = os.path.join(base_dir, f"{f.id}{split_filename_id}{f.filename}")
+                if os.path.exists(maybe_path):
+                    os.remove(maybe_path)
+            except Exception:
+                continue
+
+    return {"message": "知识库已清空", "deleted_count": len(file_ids)}

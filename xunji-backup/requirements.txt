@@ -14,3 +14,5 @@ tiktoken
 python-dotenv
 langchain-ollama
 sqlalchemy
+cos-python-sdk-v5
+oss2

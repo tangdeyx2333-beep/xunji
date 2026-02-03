@@ -1,185 +1,273 @@
 import os
-import shutil
 import uuid
-import tempfile
+from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
-from langchain_chroma import Chroma
-from langchain_community.embeddings import DashScopeEmbeddings
-from langchain_openai import OpenAIEmbeddings
-from langchain_community.document_loaders import PyPDFLoader, TextLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from pypdf import PdfReader
 from langchain_ollama import OllamaEmbeddings
+from langchain_core.documents import Document
 
-# 定义数据持久化的路径 (在当前项目根目录下生成 chroma_db 文件夹)
-PERSIST_DIRECTORY = "./chroma_db"
+try:
+    from langchain_chroma import Chroma
+except Exception:  # pragma: no cover
+    from langchain_community.vectorstores import Chroma
+
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", os.getenv("KMP_DUPLICATE_LIB_OK", "TRUE"))
 load_dotenv(override=True)
 
+
+CHUNK_SIZE_CHARS = int(os.getenv("RAG_CHUNK_SIZE_CHARS", "2000"))
+CHUNK_OVERLAP_CHARS = int(os.getenv("RAG_CHUNK_OVERLAP_CHARS", "200"))
+RAG_COLLECTION_NAME = os.getenv("RAG_COLLECTION_NAME", "zhiwei_knowledge_base")
+RAG_EMBEDDING_PROVIDER = os.getenv("RAG_EMBEDDING_PROVIDER", "ollama").lower()
+RAG_RESET_ON_SCHEMA_ERROR = os.getenv("RAG_RESET_ON_SCHEMA_ERROR", "false").lower() == "true"
+
+
 class RagService:
-    def __init__(self):
-        # model_name = os.getenv("QWEN_EMBEDDING_MODEL")
-        # api_key = os.getenv("QWEN_API_KEY")
-        # print(f"DEBUG: 正在使用的 Embedding 模型: {model_name}")
-        # print(f"DEBUG: API Key 前5位: {str(api_key)[:5] if api_key else 'None'}")
-        # 1. 初始化嵌入模型 (Embedding Model)
-        # 必须和存入时用的模型一致
-        # self.embeddings = OpenAIEmbeddings(
-        #     api_key=os.getenv("OPENAI_API_KEY")
-        # )
-        # 如果是用 Ollama:
-        self.embeddingsOllama = OllamaEmbeddings(
-            model=str(os.getenv("EMBEDDING_MODEL")),
-            base_url=str(os.getenv("OLLAMA_BASE_URL"))
-        )
-        # 千问embedding
-        self.embeddings = DashScopeEmbeddings(
-            model=str(os.getenv("QWEN_EMBEDDING_MODEL")),
-            dashscope_api_key=os.getenv("QWEN_API_KEY")
-        )
+    """RAG service based on Chroma vector store.
 
-        # 2. 初始化/加载 向量数据库
-        # 核心：只要指定了 persist_directory，它就会自动读取该目录下的数据
-        # 如果目录不存在，它会自动创建；如果存在，就自动加载。
-        self.vector_store = Chroma(
-            collection_name="zhiwei_knowledge_base",  # 集合名字
-            embedding_function=self.embeddings,  # 嵌入函数
-            persist_directory=os.getenv("PERSIST_DIRECTORY")  # ★持久化路径★
-        )
-        # ★ 新增：初始化拆分器 ★
-        # RecursiveCharacterTextSplitter: 优先按段落(\n\n)、句子(。)、逗号(，)切分
-        # from_tiktoken_encoder: 确保切分后的长度符合 token 限制，而不是字符数限制
-        self.text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
-            chunk_size=500,  # 每个块约 500 token
-            chunk_overlap=50,  # 重叠 50 token，防止断章取义
-            encoding_name="cl100k_base"  # OpenAI 的编码标准
-        )
+    This implementation avoids heavy optional dependencies (sentence-transformers/torch)
+    by using a lightweight text splitter and pypdf for PDF extraction.
+    """
 
-    def process_uploaded_file(self, file_obj, filename: str, ) -> str:
+    def __init__(self) -> None:
+        """Initialize embeddings and vector store."""
+        if RAG_EMBEDDING_PROVIDER == "dashscope":
+            try:
+                from langchain_community.embeddings import DashScopeEmbeddings
+
+                self.embeddings = DashScopeEmbeddings(
+                    model=str(os.getenv("QWEN_EMBEDDING_MODEL")),
+                    dashscope_api_key=os.getenv("QWEN_API_KEY"),
+                )
+            except Exception:
+                self.embeddings = OllamaEmbeddings(
+                    model=str(os.getenv("EMBEDDING_MODEL") or "nomic-embed-text"),
+                    base_url=str(os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434"),
+                )
+        else:
+            self.embeddings = OllamaEmbeddings(
+                model=str(os.getenv("EMBEDDING_MODEL") or "nomic-embed-text"),
+                base_url=str(os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434"),
+            )
+        self._vector_store = None
+
+    @property
+    def vector_store(self) -> Any:
+        return self._get_vector_store()
+    def _get_vector_store(self) -> Any:
+        """Lazily initialize Chroma vector store.
+
+        Returns:
+            Initialized Chroma vector store.
+
+        Raises:
+            RuntimeError: If initialization fails and reset is disabled.
         """
-        接收上传的文件对象，处理并存入向量库
-        返回: file_id (用于后续检索过滤)
+        if self._vector_store is not None:
+            return self._vector_store
+
+        persist_directory = os.getenv("PERSIST_DIRECTORY")
+        try:
+            self._vector_store = Chroma(
+                collection_name=RAG_COLLECTION_NAME,
+                embedding_function=self.embeddings,
+                persist_directory=persist_directory,
+            )
+            return self._vector_store
+        except KeyError as exc:
+            if not RAG_RESET_ON_SCHEMA_ERROR:
+                raise RuntimeError(
+                    "Chroma 数据目录可能与当前版本不兼容；请更换/清空 PERSIST_DIRECTORY 或开启 RAG_RESET_ON_SCHEMA_ERROR=true"
+                ) from exc
+            if persist_directory:
+                import shutil
+
+                shutil.rmtree(persist_directory, ignore_errors=True)
+            self._vector_store = Chroma(
+                collection_name=RAG_COLLECTION_NAME,
+                embedding_function=self.embeddings,
+                persist_directory=persist_directory,
+            )
+            return self._vector_store
+
+    def _split_text(self, text: str) -> List[str]:
+        """Split text into overlapping chunks.
+
+        Args:
+            text: Raw text.
+
+        Returns:
+            List of chunk strings.
         """
-        # 1. 生成唯一的文件ID (用于 metadata 过滤)
+        if not text:
+            return []
+        if CHUNK_SIZE_CHARS <= 0:
+            return [text]
+
+        chunks: List[str] = []
+        start = 0
+        length = len(text)
+        while start < length:
+            end = min(start + CHUNK_SIZE_CHARS, length)
+            chunks.append(text[start:end])
+            if end == length:
+                break
+            start = max(end - CHUNK_OVERLAP_CHARS, 0)
+        return chunks
+
+    def _read_pdf(self, file_path: str) -> str:
+        """Extract text from a PDF file.
+
+        Args:
+            file_path: PDF path.
+
+        Returns:
+            Extracted text.
+        """
+        reader = PdfReader(file_path)
+        texts: List[str] = []
+        for page in reader.pages:
+            texts.append(page.extract_text() or "")
+        return "\n".join(texts)
+
+    def _read_text_file(self, file_path: str) -> str:
+        """Read a UTF-8 text-like file.
+
+        Args:
+            file_path: File path.
+
+        Returns:
+            File content.
+        """
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+
+    def load_and_split_file(self, tmp_file_path: str, suffix: str) -> List[Document]:
+        """Load and split a file into Document chunks without persisting.
+
+        Args:
+            tmp_file_path: Temporary file path.
+            suffix: File suffix, like '.pdf', '.txt', '.md'.
+
+        Returns:
+            A list of Documents.
+
+        Raises:
+            ValueError: If suffix is not supported.
+        """
+        suffix = suffix.lower()
+        if suffix == ".pdf":
+            raw_text = self._read_pdf(tmp_file_path)
+        elif suffix in {".txt", ".md"}:
+            raw_text = self._read_text_file(tmp_file_path)
+        else:
+            raise ValueError(f"不支持的文件格式: {suffix}")
+
+        docs: List[Document] = []
+        for chunk in self._split_text(raw_text):
+            docs.append(Document(page_content=chunk, metadata={}))
+        return docs
+
+    def process_uploaded_file(self, file_obj: Any, filename: str) -> str:
+        """Process an uploaded file and store into vector DB.
+
+        Args:
+            file_obj: FastAPI UploadFile-like object.
+            filename: Original filename.
+
+        Returns:
+            file_id for later retrieval.
+        """
         file_id = str(uuid.uuid4())
-
-        # 2. 将上传的文件保存为临时文件 (因为 Loader 通常需要文件路径)
-        # 获取文件后缀
         suffix = os.path.splitext(filename)[1].lower()
 
+        import tempfile
+        import shutil
+
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
-            # 将 FastAPI 的 UploadFile 内容写入临时文件
             shutil.copyfileobj(file_obj.file, tmp_file)
-            tmp_file_path = tmp_file.name
+            tmp_path = tmp_file.name
 
         try:
-            # 3. 根据文件类型选择加载器
-            documents = []
-            if suffix == ".pdf":
-                loader = PyPDFLoader(tmp_file_path)
-                documents = loader.load()
-            elif suffix == ".txt" or suffix == ".md":
-                loader = TextLoader(tmp_file_path, encoding="utf-8")
-                documents = loader.load()
-            else:
-                raise ValueError(f"不支持的文件格式: {suffix}")
-
-            # 4. ★ 核心步骤：拆分文档 ★
-            split_docs = self.text_splitter.split_documents(documents)
-
-            # 5. 为每个切片添加 Metadata (关键！为了支持你之前的 filters 逻辑)
+            split_docs = self.load_and_split_file(tmp_path, suffix)
             for doc in split_docs:
                 doc.metadata["file_id"] = file_id
                 doc.metadata["filename"] = filename
-                # 你可以在这里加 user_id，如果你的 request 里传了的话
-
-            # 6. 存入 Chroma
             if split_docs:
-                self.vector_store.add_documents(split_docs)
-                print(f"文件 {filename} 处理完成，共切分为 {len(split_docs)} 块。ID: {file_id}")
-
+                self._get_vector_store().add_documents(split_docs)
             return file_id
-        except Exception as e:
-            print(f"处理文件 {filename} 时出错: {e}")
-            raise e
         finally:
-            # 7. 清理临时文件
-            if os.path.exists(tmp_file_path):
-                os.remove(tmp_file_path)
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
 
-    def add_documents(self, documents):
-        """
-        上传文档时调用
-        documents: List[Document] (由 LangChain 的 Loader 加载并切割后的)
-        """
-        # 添加文档，Chroma 会自动写入磁盘
-        self.vector_store.add_documents(documents)
-        # 旧版本需要手动调用 .persist()，新版本(0.4+)会自动保存，不需要手动写了
-        print(f"成功存入 {len(documents)} 个切片到 {PERSIST_DIRECTORY}")
+    def search(self, query: str, filters: Optional[dict] = None, k: int = 4) -> List[Document]:
+        """Similarity search in the vector store.
 
-    def search(self, query: str, filters: dict = None, k: int = 4):
-        """
-        检索
-        filters: 比如 {"file_id": "123"} 或 {"user_id": "abc"}
-        """
-        results = self.vector_store.similarity_search(
-            query,
-            k=k,
-            filter=filters  # 这里就是你要的元数据过滤
-        )
-        return results
+        Args:
+            query: Query text.
+            filters: Optional Chroma filters.
+            k: Top-k.
 
-    # app/services/rag_service.py (追加以下内容)
+        Returns:
+            Matching documents.
+        """
+        return self._get_vector_store().similarity_search(query, k=k, filter=filters)
 
-    def get_db_stats(self):
-        """
-        [调试专用] 查看数据库状态
-        返回: 总数量，以及前 3 条数据的样本
-        """
-        # 1. 获取总数量
-        # 注意: chroma 的 vector_store 对象里有个 _collection 属性可以直接操作底层
+    def get_db_stats(self) -> Dict[str, Any]:
+        """Get basic vector DB stats for debugging."""
         try:
-            # LangChain 0.1+ 写法
-            count = self.vector_store._collection.count()
-
-            # 2. 获取前 3 条样本 (peek)
-            # 包括 ids, metadatas, documents (也就是 page_content)
-            peek_data = self.vector_store._collection.peek(limit=3)
-
+            vs = self._get_vector_store()
+            count = vs._collection.count()
+            peek_data = vs._collection.peek(limit=3)
             return {
                 "total_count": count,
-                "sample_ids": peek_data["ids"],
-                "sample_metadatas": peek_data["metadatas"],
-                "sample_contents": [c[:50] + "..." for c in peek_data["documents"]]  # 只显示前50个字
+                "sample_ids": peek_data.get("ids"),
+                "sample_metadatas": peek_data.get("metadatas"),
+                "sample_contents": [(c[:50] + "...") for c in (peek_data.get("documents") or [])],
             }
-        except Exception as e:
-            return {"error": f"获取数据库状态失败: {str(e)}"}
+        except Exception as exc:
+            return {"error": f"获取数据库状态失败: {str(exc)}"}
 
-    def simple_search(self, query: str, k: int = 3, file_ids: list[str] = None) -> list[dict]:
-        """
-        纯检索接口：输入问题，返回最相似的文本块
-        """
-        filters = {}
+    def delete_docs(self, file_ids: List[str]) -> None:
+        if not file_ids:
+            return
+        vs = self._get_vector_store()
+        try:
+            vs._collection.delete(where={"file_id": {"$in": file_ids}})
+        except Exception:
+            for file_id in file_ids:
+                try:
+                    vs._collection.delete(where={"file_id": file_id})
+                except Exception:
+                    continue
+        if hasattr(vs, "persist"):
+            try:
+                vs.persist()
+            except Exception:
+                pass
+
+    def delete_doc(self, file_id: str) -> None:
+        if not file_id:
+            return
+        self.delete_docs([file_id])
+
+    def simple_search(self, query: str, k: int = 3, file_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """Simple search wrapper returning JSON-friendly results."""
+        filters: Dict[str, Any] = {}
         if file_ids:
-            # ChromaDB 的 filter 语法:
-            # 如果是多个ID: {"file_id": {"$in": ["id1", "id2"]}}
-            # 如果是单个ID: {"file_id": "id1"}
             if len(file_ids) == 1:
                 filters = {"file_id": file_ids[0]}
             else:
                 filters = {"file_id": {"$in": file_ids}}
 
-        # 执行相似度搜索
-        docs = self.vector_store.similarity_search(query, k=k, filter=filters or None)
-
-        # 格式化返回结果
-        results = []
+        docs = self._get_vector_store().similarity_search(query, k=k, filter=filters or None)
+        results: List[Dict[str, Any]] = []
         for doc in docs:
-            results.append({
-                "content": doc.page_content,  # 文本内容
-                "metadata": doc.metadata,  # 元数据 (文件名、页码等)
-                "file_id": doc.metadata.get("file_id")
-            })
+            results.append({"content": doc.page_content, "metadata": doc.metadata, "file_id": doc.metadata.get("file_id")})
         return results
 
-# 单例模式
+
 rag_service = RagService()

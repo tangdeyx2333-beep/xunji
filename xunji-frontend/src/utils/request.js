@@ -2,10 +2,16 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 
+// const apiBaseUrl = import.meta.env.VITE_API_BASE_URL
+const apiBaseUrl = import.meta.env.VITE_API_BASE_URL
+if (!apiBaseUrl) {
+  throw new Error('Missing required env: VITE_API_BASE_URL')
+}
+
 // 1. 创建 axios 实例
 const service = axios.create({
   // 这里的地址要和你的 FastAPI 后端地址一致
-  baseURL: 'http://127.0.0.1:8080', 
+  baseURL: apiBaseUrl,
   timeout: 50000 // 请求超时时间 (50秒，因为 AI 回复有时较慢)
 })
 

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, computed, onMounted, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue'
 import * as echarts from 'echarts'
 import {
   Plus, Setting, User,
@@ -7,20 +7,22 @@ import {
   Compass, DataLine, Trophy, Collection,
   Connection,
   Document, Paperclip, ArrowDown, Delete,
-  Share, CopyDocument, Position, Loading // 引入新图标
+  Share, CopyDocument, Position, Loading, SwitchButton, Close, UploadFilled // 引入新图标
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import { useRouter } from 'vue-router'
 
 // --- API --- API ---
-import { getFiles, uploadFile } from '@/api/file'
+import { getFiles, uploadFile, deleteFile, clearKnowledgeBase } from '@/api/file'
 // ★ 引入 chatStream8
-import { chatStream, getConversations, getConversationMessages, deleteConversation, getNodePath, getModels, createModel, deleteModel } from '@/api/chat'
+import { chatStream, getConversations, getConversationMessages, deleteConversation, getNodePath, getModels, createModel, deleteModel, getAttachmentSignedUrl, getInstructions, createInstruction, updateInstruction, deleteInstruction } from '@/api/chat'
 import renderMarkdown from '@/utils/markdown'
 import { useUserStore } from '@/stores/userStore'
 
 // --- 1. 基础配置 ---
 const APP_NAME = ref("xunji")
 const userStore = useUserStore()
+const router = useRouter() // 获取 router 实例
 const chatContainerRef = ref(null)
 
 // --- 2. 界面状态 ---
@@ -35,6 +37,11 @@ const sessionCache = reactive({
   // }
 })
 
+// ★★★ 新增：即时聊天文件状态 ★★★
+const currentAttachments = ref([]) // 格式: [{name, type, base64, size}]
+const chatFileInput = ref(null) // 文件输入框 ref
+const MAX_DIRECT_READ_SIZE_BYTES = 5 * 1024 * 1024
+
 const isSidebarCollapsed = ref(false)
 const inputMessage = ref('')
 const currentModel = ref('deepseek-chat')
@@ -43,17 +50,18 @@ const showChatTree = ref(false) // 控制树状图弹窗显示
 
 // --- 3. 会话管理 ---
 const showSettings = ref(false)
+const settingsActiveTab = ref('models')
 const availableModels = ref([
   // 默认模型 (可以被后端数据覆盖或合并)
   { model_name: 'deepseek-chat', display_name: 'DeepSeek Chat' },
-  { model_name: 'gpt-3.5-turbo', display_name: 'GPT-3.5 Turbo' },
-  { model_name: 'gpt-4', display_name: 'GPT-4' },
   { model_name: 'kimi-k2.5', display_name: 'Kimi-k2.5' },
-  { model_name: 'qwen-turbo', display_name: 'Qwen Turbo' },
-  { model_name: 'qwen-plus', display_name: 'Qwen Plus' },
-  { model_name: 'gemini-pro', display_name: 'Gemini Pro' }
 ])
 const newModelForm = reactive({ model_name: '', display_name: '' })
+
+const aiInstructionInput = ref('')
+const aiInstructions = ref([])
+const isInstructionsLoading = ref(false)
+const isInstructionSubmitting = ref(false)
 
 // --- 3. 会话管理 ---
 const currentConversationId = ref(null)
@@ -128,6 +136,11 @@ const currentSessionMessages = ref([]) // 当前会话的原始消息列表
 
 // --- 6. 核心方法集 ---
 
+watch(showSettings, async (isOpen) => {
+  if (!isOpen) return
+  await fetchInstructions()
+})
+
 const fetchModelList = async () => {
   try {
     const res = await getModels()
@@ -139,13 +152,7 @@ const fetchModelList = async () => {
     // 实际生产中可能希望完全由后端控制
     const defaultModels = [
       { model_name: 'deepseek-chat', display_name: 'DeepSeek Chat' },
-      { model_name: 'gpt-3.5-turbo', display_name: 'GPT-3.5 Turbo' },
-      { model_name: 'gpt-4', display_name: 'GPT-4' },
       { model_name: 'kimi-k2.5', display_name: 'Kimi-k2.5' },
-      { model_name: 'qwen-turbo', display_name: 'Qwen Turbo' },
-      { model_name: 'qwen-plus', display_name: 'Qwen Plus' },
-      { model_name: 'gemini-pro', display_name: 'Gemini Pro' },
-      { model_name: 'ollama/llama3.2:1b', display_name: 'Llama3 (Local)' } // 添加默认的 Ollama 示例
     ]
     
     // 过滤掉已经在 customModels 里的默认模型 (按 model_name)
@@ -155,6 +162,76 @@ const fetchModelList = async () => {
     availableModels.value = [...filteredDefaults, ...customModels]
   } catch (error) {
     console.error("加载模型列表失败:", error)
+  }
+}
+
+const fetchInstructions = async () => {
+  try {
+    isInstructionsLoading.value = true
+    const res = await getInstructions()
+    aiInstructions.value = Array.isArray(res) ? res : []
+  } catch (error) {
+    console.error('加载 AI 指令失败:', error)
+    ElMessage.error('加载 AI 指令失败')
+  } finally {
+    isInstructionsLoading.value = false
+  }
+}
+
+const handleAddInstruction = async () => {
+  const content = (aiInstructionInput.value || '').trim()
+  if (!content) {
+    ElMessage.warning('请输入指令内容')
+    return
+  }
+  try {
+    isInstructionSubmitting.value = true
+    await createInstruction({ content })
+    aiInstructionInput.value = ''
+    ElMessage.success('添加成功')
+    await fetchInstructions()
+  } catch (error) {
+    ElMessage.error(error?.message || '添加失败')
+  } finally {
+    isInstructionSubmitting.value = false
+  }
+}
+
+const handleDeleteInstruction = async (row) => {
+  try {
+    await deleteInstruction(row.id)
+    ElMessage.success('删除成功')
+    await fetchInstructions()
+  } catch (error) {
+    ElMessage.error(error?.message || '删除失败')
+  }
+}
+
+const moveInstructionUp = async (row) => {
+  const idx = aiInstructions.value.findIndex((r) => r.id === row.id)
+  if (idx <= 0) return
+  const prev = aiInstructions.value[idx - 1]
+  const curr = aiInstructions.value[idx]
+  try {
+    await updateInstruction(curr.id, { sort_order: prev.sort_order })
+    await updateInstruction(prev.id, { sort_order: curr.sort_order })
+    await fetchInstructions()
+  } catch (error) {
+    ElMessage.error(error?.message || '排序调整失败')
+  }
+}
+
+const moveInstructionDown = async (row) => {
+  const idx = aiInstructions.value.findIndex((r) => r.id === row.id)
+  if (idx < 0 || idx >= aiInstructions.value.length - 1) return
+  const next = aiInstructions.value[idx + 1]
+  const curr = aiInstructions.value[idx]
+  try {
+    await updateInstruction(curr.id, { sort_order: next.sort_order })
+    await updateInstruction(next.id, { sort_order: curr.sort_order })
+    await fetchInstructions()
+  } catch (error) {
+    ElMessage.error(error?.message || '排序调整失败')
   }
 }
 
@@ -245,6 +322,7 @@ const switchSession = async (session) => {
         role: isAI ? 'ai' : 'user',
         content: msg.content,
         html: isAI ? renderMarkdown(msg.content) : '',
+        attachments: msg.attachments || [],
         loading: false,
         done: true // 历史消息默认已完成
       }
@@ -286,6 +364,12 @@ const removeSession = async (e, id) => {
   } catch (error) {
     ElMessage.error('删除失败')
   }
+}
+
+const handleLogout = () => {
+  userStore.logout() // 清除 Pinia 状态和 Token
+  router.push('/login') // 跳转到登录页
+  ElMessage.success('已退出登录')
 }
 
 // --- 聊天树逻辑 ---
@@ -382,11 +466,18 @@ const initEChartsTree = (data) => {
     tooltip: {
       trigger: 'item',
       triggerOn: 'mousemove',
+      extraCssText: 'max-width: 400px; white-space: normal; word-break: break-all;', // 限制宽度并允许换行
       formatter: function (params) {
          // 悬浮显示完整内容
          const original = params.data.original
          if (original) {
-             return `${original.role === 'user' ? '用户' : 'AI'}:<br/>${original.content}`
+             const role = original.role === 'user' ? '用户' : 'AI'
+             let content = original.content
+             // 限制为 200 字，超出显示省略号
+             if (content.length > 200) {
+                 content = content.substring(0, 200) + '...'
+             }
+             return `<strong>${role}</strong>:<br/>${content}`
          }
          return params.name
       }
@@ -462,19 +553,29 @@ const handleTreeNodeClick = async (data) => {
   try {
     // 1. 设置当前点击的节点为新的父节点
     // 这样下次对话就会挂在这个节点下面
-    currentLeafId.value = data.id 
+    // currentLeafId.value = data.id // 改为通过 sessionCache 设置
     
     // 2. 调用后端接口获取【从根节点到当前点击节点】的完整路径
     // 注意：这里不再自动向后延伸，而是准确地停在用户点击的那个节点
     const pathMessages = await getNodePath(data.id)
     
     // 3. 更新界面
-    chatHistory.value = pathMessages.map(msg => ({
-      role: msg.role === 'assistant' ? 'ai' : 'user',
-      content: msg.content,
-      html: msg.role === 'assistant' ? renderMarkdown(msg.content) : '',
-      loading: false
-    }))
+    // 关键修复：直接更新 sessionCache 中的消息列表，而不是只更新 chatHistory (它现在是 computed)
+    if (currentConversationId.value && sessionCache[currentConversationId.value]) {
+        sessionCache[currentConversationId.value].currentLeafId = data.id // 更新叶子节点
+        
+        sessionCache[currentConversationId.value].messages = pathMessages.map(msg => {
+          const isAI = ['assistant', 'ai', 'model'].includes(msg.role)
+          return {
+            role: isAI ? 'ai' : 'user',
+            content: msg.content,
+            html: isAI ? renderMarkdown(msg.content) : '',
+            attachments: msg.attachments || [],
+            loading: false,
+            done: true
+          }
+        })
+    }
     
     scrollToBottom()
     
@@ -567,7 +668,8 @@ const handleCopy = async (text) => {
 // ★★★ 发送消息核心逻辑 (改为流式调用) ★★★
 const sendMessage = async () => {
   const text = inputMessage.value.trim()
-  if (!text) return
+  const attachmentsSnapshot = [...currentAttachments.value]
+  if (!text && attachmentsSnapshot.length === 0) return
   if (isSending.value) return // 防止重复发送
 
   // --- 1. 确定当前操作的会话上下文 ---
@@ -587,8 +689,9 @@ const sendMessage = async () => {
   }
 
   // --- 2. 用户消息上屏 ---
-  activeSessionState.messages.push({ role: 'user', content: text })
+  activeSessionState.messages.push({ role: 'user', content: text, attachments: attachmentsSnapshot })
   inputMessage.value = ''
+  currentAttachments.value = []
   
   // 设置发送状态 (注意：对于新会话，这里设置的是临时变量，暂时没用 computed 追踪它，但没关系)
   if (!isNewSession) {
@@ -604,7 +707,7 @@ const sendMessage = async () => {
   activeSessionState.messages.push(aiMessage)
   scrollToBottom()
 
-  // --- 4. 构造请求体 ---
+  // --- 3. 构造请求体 ---
   const payload = {
     user_id: userStore.userInfo?.id,
     message: text,
@@ -613,7 +716,8 @@ const sendMessage = async () => {
     enable_rag: selectedCount.value > 0,
     file_ids: selectedFileIds.value,
     conversation_id: currentConversationId.value,
-    parent_id: activeSessionState.currentLeafId // 使用当前会话的状态
+    parent_id: activeSessionState.currentLeafId, // 使用当前会话的状态
+    files: attachmentsSnapshot // ★ 传递即时聊天文件
   }
 
   // --- 5. 发起流式请求 ---
@@ -654,7 +758,12 @@ const sendMessage = async () => {
       aiMessage.loading = false
       aiMessage.done = true 
       
-      if (!isNewSession) {
+      // 确保 isSending 被重置
+      if (isNewSession) {
+          if (currentConversationId.value && sessionCache[currentConversationId.value]) {
+              sessionCache[currentConversationId.value].isSending = false
+          }
+      } else {
          activeSessionState.isSending = false
       }
       
@@ -667,9 +776,15 @@ const sendMessage = async () => {
     (err) => {
       aiMessage.loading = false
       aiMessage.done = true
-      if (!isNewSession) {
+      
+      if (isNewSession) {
+          if (currentConversationId.value && sessionCache[currentConversationId.value]) {
+              sessionCache[currentConversationId.value].isSending = false
+          }
+      } else {
          activeSessionState.isSending = false
       }
+
       aiMessage.html += `<br><span style="color:red">[网络错误: ${err.message}]</span>`
     },
     // onMeta: 收到元数据 (session_id, user_node_id, ai_node_id)
@@ -710,7 +825,57 @@ const sendMessage = async () => {
           }
           if (meta.ai_node_id) {
              targetSessionState.currentLeafId = meta.ai_node_id
+             
+             // ★ 核心修复：收到 ai_node_id 意味着 AI 内容回复完毕 ★
+             // 此时即使流还没断（因为后台还在生成标题），我们也可以认为本次对话交互已经结束
+             // 提前结束 Loading 状态，恢复发送按钮
+             aiMessage.loading = false
+             aiMessage.done = true 
+             if (!isNewSession) {
+                activeSessionState.isSending = false
+             }
+             // 注意：这里如果是新会话，我们可能还想等标题生成后再刷新列表，或者现在就刷新也行
+             // 但为了体验更流畅，我们在这里先不置 isSending = false (针对新会话)，
+             // 或者我们可以允许用户继续操作，标题更新在后台静默完成。
+             
+             // 策略：新会话也立即解锁
+             if (isNewSession) {
+                 // ★ 修复：如果是新会话，此时 activeSessionState 还是 tempNewSessionState
+                 // 但 isSending 计算属性依赖的是 sessionCache[currentConversationId]
+                 // 所以必须显式更新 sessionCache 中的状态
+                 if (currentConversationId.value && sessionCache[currentConversationId.value]) {
+                     sessionCache[currentConversationId.value].isSending = false
+                 }
+                 
+                 // 先刷新一次列表，显示“新对话”
+                 fetchSessionList()
+             } else {
+                 activeSessionState.isSending = false
+             }
           }
+          if (meta.user_attachments_saved && Array.isArray(meta.user_attachments_saved)) {
+             const msgs = targetSessionState.messages || []
+             for (let i = msgs.length - 1; i >= 0; i--) {
+               if (msgs[i].role === 'user') {
+                 const localAtts = Array.isArray(msgs[i].attachments) ? msgs[i].attachments : []
+                 const saved = meta.user_attachments_saved
+                 msgs[i].attachments = saved.map(s => {
+                   const matched = localAtts.find(a => (a.name || a.filename) === s.filename)
+                   return { ...matched, ...s, mime: matched?.mime || s.mime }
+                 })
+                 break
+               }
+             }
+          }
+      }
+      
+      // ★ 实时更新标题 ★
+      if (meta.new_title) {
+         // 更新历史列表中的标题
+         const session = historyList.value.find(s => s.id === meta.session_id || s.id === currentConversationId.value)
+         if (session) {
+            session.title = meta.new_title
+         }
       }
     }
   )
@@ -735,6 +900,124 @@ const handleFileChange = async (e) => {
     isUploading.value = false
     e.target.value = ''
   }
+}
+
+const handleDeleteKnowledgeFile = async (fileId) => {
+  const ok = window.confirm('确定删除该知识库文件吗？')
+  if (!ok) return
+  try {
+    await deleteFile(fileId)
+    selectedFileIds.value = selectedFileIds.value.filter(id => id !== fileId)
+    await fetchFileList()
+    ElMessage.success('删除成功')
+  } catch (e) {
+    ElMessage.error('删除失败')
+  }
+}
+
+const handleClearKnowledgeBase = async () => {
+  const ok = window.confirm('确定清空本地知识库吗？该操作会移除你上传的所有知识库文件索引。')
+  if (!ok) return
+  const ok2 = window.confirm('再次确认：真的要清空吗？')
+  if (!ok2) return
+  try {
+    await clearKnowledgeBase()
+    selectedFileIds.value = []
+    await fetchFileList()
+    ElMessage.success('知识库已清空')
+  } catch (e) {
+    ElMessage.error('清空失败')
+  }
+}
+
+// ★★★ 新增：即时聊天文件处理逻辑 ★★★
+const triggerChatFileInput = () => chatFileInput.value.click()
+
+const handleChatFileSelect = async (e) => {
+  const files = Array.from(e.target.files)
+  if (!files.length) return
+  
+  for (const file of files) {
+    await processAttachment(file)
+  }
+  e.target.value = '' // 重置 input
+}
+
+const handlePaste = async (e) => {
+  const items = e.clipboardData.items
+  for (const item of items) {
+    if (item.kind === 'file') {
+      const file = item.getAsFile()
+      if (file) await processAttachment(file)
+    }
+  }
+}
+
+const processAttachment = (file) => {
+  return new Promise((resolve) => {
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const base64Url = e.target.result
+      // 提取纯 Base64 (去除 data:image/xxx;base64, 前缀)
+      const base64Data = base64Url.split(',')[1]
+      
+      let type = 'file'
+      if (file.type.startsWith('image/')) type = 'image'
+      if (file.type.startsWith('video/')) type = 'video'
+      
+      currentAttachments.value.push({
+        name: file.name,
+        type: type,
+        mime: file.type,
+        base64: base64Data,
+        size: file.size
+      })
+      ElMessage.success(`已添加附件：${file.name}`)
+      if (file.size > MAX_DIRECT_READ_SIZE_BYTES) {
+        ElMessage.warning('附件超过 5MB：后端将自动使用检索模式提取相关片段')
+      }
+      resolve()
+    }
+    reader.readAsDataURL(file)
+  })
+}
+
+const removeAttachment = (index) => {
+  currentAttachments.value.splice(index, 1)
+}
+
+const formatSize = (bytes) => {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
+}
+
+const ensureSignedUrl = async (att) => {
+  if (att.url) return att.url
+  if (!att.id) return null
+  try {
+    const res = await getAttachmentSignedUrl(att.id)
+    att.url = res.url
+    att.expires_at = res.expires_at
+    return att.url
+  } catch (e) {
+    ElMessage.error('获取附件链接失败')
+    return null
+  }
+}
+
+const openAttachment = async (att) => {
+  const url = att.url || (att.base64 ? `data:${att.mime || 'application/octet-stream'};base64,${att.base64}` : null) || await ensureSignedUrl(att)
+  if (!url) return
+  window.open(url, '_blank', 'noopener')
+}
+
+const getAttachmentSrc = (att) => {
+  if (att.url) return att.url
+  if (att.base64) return `data:${att.mime || 'application/octet-stream'};base64,${att.base64}`
+  return ''
 }
 
 // 辅助方法
@@ -829,7 +1112,17 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
            <el-icon><Share /></el-icon>
         </el-button>
 
-        <el-avatar :size="32" class="user-avatar" style="margin-left: 12px">U</el-avatar>
+        <!-- 用户头像下拉菜单 -->
+        <el-dropdown trigger="click" @command="(cmd) => cmd === 'logout' && handleLogout()">
+          <el-avatar :size="32" class="user-avatar cursor-pointer" style="margin-left: 12px">U</el-avatar>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="logout" style="color: #f56c6c;">
+                <el-icon><SwitchButton /></el-icon> 注销
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </header>
 
       <div class="content-scroll-area" ref="chatContainerRef">
@@ -856,12 +1149,21 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
                    <!-- 复制按钮 -->
                    <div v-if="msg.done" class="message-actions">
                      <el-button type="primary" plain size="small" @click="handleCopy(msg.content)">
-                       <el-icon style="margin-right: 4px"><CopyDocument /></el-icon> 复制内容
+                       <el-icon style="margin-right: 4px"><CopyDocument /></el-icon> 
                      </el-button>
                    </div>
                 </div>
               </div>
-              <div v-else class="user-text">{{ msg.content }}</div>
+              <div v-else class="user-text">
+                <div v-if="msg.content">{{ msg.content }}</div>
+                <div v-if="msg.attachments && msg.attachments.length > 0" class="message-attachments">
+                  <a v-for="att in msg.attachments" :key="att.id || att.storage_key || att.name" class="att-item" href="#" @click.prevent="openAttachment(att)">
+                    <img v-if="(att.mime || '').startsWith('image/') || att.type === 'image'" class="att-thumb" :src="getAttachmentSrc(att)" />
+                    <video v-else-if="(att.mime || '').startsWith('video/') || att.type === 'video'" class="att-video" :src="getAttachmentSrc(att)" controls />
+                    <span v-else class="att-file">{{ att.filename || att.name }}</span>
+                  </a>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -869,27 +1171,51 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
 
       <div class="input-container-wrapper">
         <div class="input-box">
+          <!-- 0. 附件预览区 (新增) -->
+          <div v-if="currentAttachments.length > 0" class="attachment-preview-area">
+            <div v-for="(file, index) in currentAttachments" :key="index" class="attachment-card">
+              <!-- 图片预览 -->
+              <div v-if="file.type === 'image'" class="preview-thumb" :style="{ backgroundImage: `url(${file.base64})` }"></div>
+              <!-- 文件预览 -->
+              <div v-else class="preview-file">
+                <el-icon><Document /></el-icon>
+              </div>
+              
+              <div class="file-meta">
+                <span class="fname" :title="file.name">{{ file.name }}</span>
+                <span class="fsize">{{ formatSize(file.size) }}</span>
+              </div>
+              
+              <div class="remove-btn" @click="removeAttachment(index)">
+                <el-icon><Close /></el-icon>
+              </div>
+            </div>
+          </div>
+
           <!-- 1. 输入区域 (顶部) -->
           <el-input 
             v-model="inputMessage" 
             type="textarea" 
             :autosize="{ minRows: 1, maxRows: 8 }"
-            :placeholder="selectedCount > 0 ? `已引用 ${selectedCount} 个文件...` : '问问 xunji'"
+            :placeholder="selectedCount > 0 ? `已引用 ${selectedCount} 个文件...` : '问问 xunji (支持粘贴图片/文件)'"
             class="gemini-input" 
             resize="none" 
-            @keydown.enter.exact.prevent="sendMessage" 
+            @keydown.enter.exact.prevent="sendMessage"
+            @paste="handlePaste"
           />
 
           <!-- 2. 工具栏 (底部) -->
           <div class="input-toolbar">
             <!-- 左侧工具: 添加附件、知识库 -->
             <div class="toolbar-left">
+              <!-- 知识库引用 (保持不变) -->
               <el-popover placement="top-start" :width="300" trigger="click" popper-class="file-selector-popover">
                 <template #reference>
-                  <el-button circle link class="action-btn" :class="{ 'has-files': selectedCount > 0 }">
-                    <el-icon :size="20"><Plus /></el-icon>
+                  <el-button circle link class="action-btn" :class="{ 'has-files': selectedCount > 0 }" title="引用知识库">
+                    <el-icon :size="20"><Collection /></el-icon>
                   </el-button>
                 </template>
+                <!-- ... Popover 内容 ... -->
                 <div class="file-list-header">
                   <span>引用知识库</span>
                   <span class="count" v-if="selectedCount > 0">{{ selectedCount }} 选中</span>
@@ -904,15 +1230,31 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
                           <span class="fname" :title="file.filename">{{ file.filename }}</span>
                         </div>
                       </el-checkbox>
+                      <el-button circle link class="action-btn" title="删除" @click.stop="handleDeleteKnowledgeFile(file.id)">
+                        <el-icon :size="16"><Delete /></el-icon>
+                      </el-button>
                     </div>
                   </el-checkbox-group>
                 </el-scrollbar>
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;">
+                  <span style="font-size:12px;color:#888;">管理知识库</span>
+                  <el-button type="danger" link size="small" @click="handleClearKnowledgeBase">清空知识库</el-button>
+                </div>
               </el-popover>
 
+              <!-- 上传到知识库 (保持不变，或根据需求移动位置) -->
               <input type="file" ref="fileInput" style="display: none" accept=".pdf,.txt,.md,.docx,.py,.java" @change="handleFileChange">
-              <el-tooltip content="上传文件" placement="top" effect="dark">
+              <el-tooltip content="上传到知识库" placement="top" effect="dark">
                 <el-button circle link class="action-btn" @click="triggerFileInput" :loading="isUploading">
-                  <el-icon :size="20" v-if="!isUploading"><Paperclip /></el-icon>
+                  <el-icon :size="20" v-if="!isUploading"><UploadFilled /></el-icon>
+                </el-button>
+              </el-tooltip>
+              
+              <!-- ★ 新增：添加到当前对话 (本地文件/多模态) ★ -->
+              <input type="file" ref="chatFileInput" style="display: none" multiple @change="handleChatFileSelect">
+              <el-tooltip content="添加到对话 (图片/文档)" placement="top" effect="dark">
+                <el-button circle link class="action-btn" @click="triggerChatFileInput">
+                  <el-icon :size="20"><Paperclip /></el-icon>
                 </el-button>
               </el-tooltip>
             </div>
@@ -925,7 +1267,7 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
                 </el-button>
               </el-tooltip>
               
-              <el-button circle :type="inputMessage ? 'primary' : ''" :disabled="!inputMessage && !isSending" @click="sendMessage" class="send-btn">
+              <el-button circle :type="inputMessage || currentAttachments.length > 0 ? 'primary' : ''" :disabled="(!inputMessage && currentAttachments.length === 0) && !isSending" @click="sendMessage" class="send-btn">
                 <el-icon :size="18">
                   <Loading v-if="isSending" class="is-loading" />
                   <Position v-else />
@@ -945,7 +1287,7 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
 
     <!-- 设置弹窗 -->
     <el-dialog v-model="showSettings" title="设置" width="500px">
-      <el-tabs>
+      <el-tabs v-model="settingsActiveTab">
         <el-tab-pane label="模型管理" name="models">
           <div class="settings-section">
             <h3>添加新模型</h3>
@@ -970,6 +1312,49 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
                     删除
                   </el-button>
                   <span v-else style="color: #999; font-size: 12px">默认</span>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </el-tab-pane>
+        <el-tab-pane label="AI 指令" name="instructions">
+          <div class="settings-section">
+            <h3>添加指令</h3>
+            <el-input
+              v-model="aiInstructionInput"
+              type="textarea"
+              :rows="4"
+              placeholder="例如：请用简洁中文回答；先给结论再解释；代码请给可运行示例"
+              style="margin-bottom: 10px"
+            />
+            <el-button
+              type="primary"
+              :loading="isInstructionSubmitting"
+              @click="handleAddInstruction"
+              style="width: 100%"
+            >
+              添加
+            </el-button>
+
+            <h3 style="margin-top: 20px">指令列表</h3>
+            <el-table :data="aiInstructions" style="width: 100%" max-height="300" v-loading="isInstructionsLoading">
+              <el-table-column prop="content" label="内容" />
+              <el-table-column label="操作" width="170">
+                <template #default="scope">
+                  <el-button link size="small" @click="moveInstructionUp(scope.row)" :disabled="scope.$index === 0">
+                    上移
+                  </el-button>
+                  <el-button
+                    link
+                    size="small"
+                    @click="moveInstructionDown(scope.row)"
+                    :disabled="scope.$index === aiInstructions.length - 1"
+                  >
+                    下移
+                  </el-button>
+                  <el-button link type="danger" size="small" @click="handleDeleteInstruction(scope.row)">
+                    删除
+                  </el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -1332,6 +1717,52 @@ $hover-color: #e3e3e3;
       font-size: 16px;
       color: #333;
       overflow-x: hidden;
+
+      .message-attachments {
+        margin-top: 8px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+
+        .att-item {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 6px 8px;
+          border: 1px solid #e0e0e0;
+          border-radius: 10px;
+          background: #fff;
+          text-decoration: none;
+          color: inherit;
+          max-width: 260px;
+        }
+
+        .att-thumb {
+          width: 64px;
+          height: 48px;
+          object-fit: cover;
+          border-radius: 8px;
+          border: 1px solid #eee;
+          background: #fafafa;
+          flex-shrink: 0;
+        }
+
+        .att-video {
+          width: 200px;
+          max-width: 100%;
+          border-radius: 10px;
+          border: 1px solid #eee;
+          background: #000;
+        }
+
+        .att-file {
+          font-size: 13px;
+          color: #1967d2;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+      }
     }
 
     .user-avatar {
@@ -1495,6 +1926,89 @@ $hover-color: #e3e3e3;
       &:hover {
         color: #1f1f1f;
         background-color: #f1f3f4;
+      }
+    }
+
+    /* 附件预览区样式 */
+    .attachment-preview-area {
+      display: flex;
+      gap: 10px;
+      padding-bottom: 10px;
+      margin-bottom: 10px;
+      border-bottom: 1px solid #f0f0f0;
+      overflow-x: auto;
+      
+      .attachment-card {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        width: 100px;
+        background: #f8f9fa;
+        border-radius: 8px;
+        padding: 8px;
+        border: 1px solid #e0e0e0;
+        
+        .preview-thumb {
+          width: 80px;
+          height: 60px;
+          background-size: cover;
+          background-position: center;
+          border-radius: 4px;
+          margin-bottom: 6px;
+        }
+        
+        .preview-file {
+          width: 80px;
+          height: 60px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 32px;
+          color: #909399;
+          margin-bottom: 6px;
+        }
+        
+        .file-meta {
+          width: 100%;
+          text-align: center;
+          
+          .fname {
+            display: block;
+            font-size: 12px;
+            color: #333;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+          }
+          
+          .fsize {
+            font-size: 10px;
+            color: #999;
+          }
+        }
+        
+        .remove-btn {
+          position: absolute;
+          top: -6px;
+          right: -6px;
+          width: 20px;
+          height: 20px;
+          background: #ff4d4f;
+          color: white;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          font-size: 12px;
+          opacity: 0;
+          transition: opacity 0.2s;
+        }
+        
+        &:hover .remove-btn {
+          opacity: 1;
+        }
       }
     }
 

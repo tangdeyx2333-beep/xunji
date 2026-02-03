@@ -8,11 +8,11 @@
       <jdbc-url>jdbc:sqlite:$PROJECT_DIR$/app/vector_store/chroma.sqlite3</jdbc-url>
       <working-dir>$ProjectFileDir$</working-dir>
     </data-source>
-    <data-source source="LOCAL" name="zhiwei" uuid="0ca6d0f3-2951-4655-9998-fa5194d138da">
+    <data-source source="LOCAL" name="xunji" uuid="6fbb8607-eb3c-486a-a38a-99b27d5baa5e">
       <driver-ref>sqlite.xerial</driver-ref>
       <synchronize>true</synchronize>
       <jdbc-driver>org.sqlite.JDBC</jdbc-driver>
-      <jdbc-url>jdbc:sqlite:$PROJECT_DIR$/zhiwei.db</jdbc-url>
+      <jdbc-url>jdbc:sqlite:$PROJECT_DIR$/database/xunji.db</jdbc-url>
       <working-dir>$ProjectFileDir$</working-dir>
     </data-source>
     <data-source source="LOCAL" name="xunji" uuid="4f1005a0-f2ca-4c89-b22f-1584d749c50b">

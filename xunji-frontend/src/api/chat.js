@@ -36,6 +36,27 @@ export function deleteModel(modelId) {
   return request({ url: `/api/models/${modelId}`, method: 'delete' })
 }
 
+export function getAttachmentSignedUrl(attachmentId, params) {
+  return request({ url: `/api/attachments/${attachmentId}/signed-url`, method: 'get', params })
+}
+
+// --- AI 指令 API ---
+export function getInstructions() {
+  return request({ url: '/api/instructions', method: 'get' })
+}
+
+export function createInstruction(data) {
+  return request({ url: '/api/instructions', method: 'post', data })
+}
+
+export function updateInstruction(instructionId, data) {
+  return request({ url: `/api/instructions/${instructionId}`, method: 'put', data })
+}
+
+export function deleteInstruction(instructionId) {
+  return request({ url: `/api/instructions/${instructionId}`, method: 'delete' })
+}
+
 /**
  * ★★★ 新增：流式对话核心方法 ★★★
  * 使用原生 fetch 实现
@@ -43,8 +64,11 @@ export function deleteModel(modelId) {
 export async function chatStream(data, onMessage, onDone, onError, onMeta) {
   try {
     const token = localStorage.getItem('access_token')
-    // 注意：这里需要写完整的后端地址，或者通过 import.meta.env.VITE_API_URL 获取
-    const baseUrl = 'http://127.0.0.1:8080' 
+
+    const baseUrl = import.meta.env.VITE_API_BASE_URL
+    if (!baseUrl) {
+      throw new Error('Missing required env: VITE_API_BASE_URL')
+    }
     
     const response = await fetch(`${baseUrl}/api/chat`, {
       method: 'POST',
@@ -90,11 +114,19 @@ export async function chatStream(data, onMessage, onDone, onError, onMeta) {
               onMessage(payload.content)
             }
             
-            // 2. 元数据通知 (session_id, user_node_id, ai_node_id)
+            // 2. 元数据通知 (session_id, user_node_id, ai_node_id, new_title, etc.)
             if (onMeta) {
-               // 只要包含任何元数据字段，就回调
-               if (payload.session_id || payload.user_node_id || payload.ai_node_id) {
+               // 只要不是纯内容片段，都视为元数据通知给上层
+               // 这样以后增加字段不需要修改这里
+               if (!payload.content) {
                  onMeta(payload)
+               } else {
+                 // 如果既有 content 又有其他字段（虽然目前后端逻辑是分开的），也尝试回调
+                 // 提取出非 content 的字段
+                 const { content, ...metaData } = payload
+                 if (Object.keys(metaData).length > 0) {
+                    onMeta(metaData)
+                 }
                }
             }
           } catch (e) {
