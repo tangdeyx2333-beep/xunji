@@ -57,6 +57,22 @@ export function deleteInstruction(instructionId) {
   return request({ url: `/api/instructions/${instructionId}`, method: 'delete' })
 }
 
+export function getConversationInstructions(conversationId) {
+  return request({ url: `/api/conversations/${conversationId}/instructions`, method: 'get' })
+}
+
+export function createConversationInstruction(conversationId, data) {
+  return request({ url: `/api/conversations/${conversationId}/instructions`, method: 'post', data })
+}
+
+export function updateConversationInstruction(conversationId, instructionId, data) {
+  return request({ url: `/api/conversations/${conversationId}/instructions/${instructionId}`, method: 'put', data })
+}
+
+export function deleteConversationInstruction(conversationId, instructionId) {
+  return request({ url: `/api/conversations/${conversationId}/instructions/${instructionId}`, method: 'delete' })
+}
+
 /**
  * ★★★ 新增：流式对话核心方法 ★★★
  * 使用原生 fetch 实现

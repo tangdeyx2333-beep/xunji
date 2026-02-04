@@ -162,6 +162,24 @@ class AiInstruction(Base):
     user = relationship("User")
 
 
+class ConversationAiInstruction(Base):
+    __tablename__ = "conversation_ai_instructions"
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    conversation_id = Column(String, ForeignKey("conversations.id"), nullable=False)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False)
+
+    content = Column(Text, nullable=False)
+    sort_order = Column(Integer, default=0)
+
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    is_deleted = Column(Boolean, default=False)
+
+    user = relationship("User")
+    conversation = relationship("Conversation")
+
+
 class MessageAttachment(Base):
     __tablename__ = "message_attachments"
 

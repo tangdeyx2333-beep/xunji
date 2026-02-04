@@ -15,7 +15,7 @@ import { useRouter } from 'vue-router'
 // --- API --- API ---
 import { getFiles, uploadFile, deleteFile, clearKnowledgeBase } from '@/api/file'
 // ★ 引入 chatStream8
-import { chatStream, getConversations, getConversationMessages, deleteConversation, getNodePath, getModels, createModel, deleteModel, getAttachmentSignedUrl, getInstructions, createInstruction, updateInstruction, deleteInstruction } from '@/api/chat'
+import { chatStream, getConversations, getConversationMessages, deleteConversation, getNodePath, getModels, createModel, deleteModel, getAttachmentSignedUrl, getInstructions, createInstruction, updateInstruction, deleteInstruction, getConversationInstructions, createConversationInstruction, updateConversationInstruction, deleteConversationInstruction } from '@/api/chat'
 import renderMarkdown from '@/utils/markdown'
 import { useUserStore } from '@/stores/userStore'
 
@@ -47,6 +47,7 @@ const inputMessage = ref('')
 const currentModel = ref('deepseek-chat')
 const enableSearch = ref(false)
 const showChatTree = ref(false) // 控制树状图弹窗显示
+const showConversationInstructions = ref(false)
 
 // --- 3. 会话管理 ---
 const showSettings = ref(false)
@@ -62,6 +63,11 @@ const aiInstructionInput = ref('')
 const aiInstructions = ref([])
 const isInstructionsLoading = ref(false)
 const isInstructionSubmitting = ref(false)
+
+const conversationInstructionInput = ref('')
+const conversationInstructions = ref([])
+const isConversationInstructionsLoading = ref(false)
+const isConversationInstructionSubmitting = ref(false)
 
 // --- 3. 会话管理 ---
 const currentConversationId = ref(null)
@@ -139,6 +145,16 @@ const currentSessionMessages = ref([]) // 当前会话的原始消息列表
 watch(showSettings, async (isOpen) => {
   if (!isOpen) return
   await fetchInstructions()
+})
+
+watch(showConversationInstructions, async (isOpen) => {
+  if (!isOpen) return
+  await fetchConversationInstructions()
+})
+
+watch(currentConversationId, async () => {
+  if (!showConversationInstructions.value) return
+  await fetchConversationInstructions()
 })
 
 const fetchModelList = async () => {
@@ -230,6 +246,87 @@ const moveInstructionDown = async (row) => {
     await updateInstruction(curr.id, { sort_order: next.sort_order })
     await updateInstruction(next.id, { sort_order: curr.sort_order })
     await fetchInstructions()
+  } catch (error) {
+    ElMessage.error(error?.message || '排序调整失败')
+  }
+}
+
+const fetchConversationInstructions = async () => {
+  if (!currentConversationId.value) {
+    conversationInstructions.value = []
+    return
+  }
+  try {
+    isConversationInstructionsLoading.value = true
+    const res = await getConversationInstructions(currentConversationId.value)
+    conversationInstructions.value = Array.isArray(res) ? res : []
+  } catch (error) {
+    console.error('加载会话指令失败:', error)
+    ElMessage.error('加载会话指令失败')
+  } finally {
+    isConversationInstructionsLoading.value = false
+  }
+}
+
+const handleAddConversationInstruction = async () => {
+  if (!currentConversationId.value) {
+    ElMessage.warning('请先开始一次对话生成会话')
+    return
+  }
+  const content = (conversationInstructionInput.value || '').trim()
+  if (!content) {
+    ElMessage.warning('请输入指令内容')
+    return
+  }
+  try {
+    isConversationInstructionSubmitting.value = true
+    await createConversationInstruction(currentConversationId.value, { content })
+    conversationInstructionInput.value = ''
+    ElMessage.success('添加成功')
+    await fetchConversationInstructions()
+  } catch (error) {
+    ElMessage.error(error?.message || '添加失败')
+  } finally {
+    isConversationInstructionSubmitting.value = false
+  }
+}
+
+const handleDeleteConversationInstruction = async (row) => {
+  if (!currentConversationId.value) return
+  try {
+    await deleteConversationInstruction(currentConversationId.value, row.id)
+    ElMessage.success('删除成功')
+    await fetchConversationInstructions()
+  } catch (error) {
+    ElMessage.error(error?.message || '删除失败')
+  }
+}
+
+const moveConversationInstructionUp = async (row) => {
+  if (!currentConversationId.value) return
+  const idx = conversationInstructions.value.findIndex((r) => r.id === row.id)
+  if (idx <= 0) return
+  const prev = conversationInstructions.value[idx - 1]
+  const curr = conversationInstructions.value[idx]
+  try {
+    await updateConversationInstruction(currentConversationId.value, curr.id, { sort_order: prev.sort_order })
+    await updateConversationInstruction(currentConversationId.value, prev.id, { sort_order: curr.sort_order })
+    await fetchConversationInstructions()
+  } catch (error) {
+    ElMessage.error(error?.message || '排序调整失败')
+  }
+}
+
+const moveConversationInstructionDown = async (row) => {
+  if (!currentConversationId.value) return
+  const idx = conversationInstructions.value.findIndex((r) => r.id === row.id)
+  if (idx < 0 || idx >= conversationInstructions.value.length - 1) return
+  const next = conversationInstructions.value[idx + 1]
+  const curr = conversationInstructions.value[idx]
+  try {
+    await updateConversationInstruction(currentConversationId.value, curr.id, { sort_order: next.sort_order })
+    await updateConversationInstruction(currentConversationId.value, next.id, { sort_order: curr.sort_order })
+    await fetchConversationInstructions()
   } catch (error) {
     ElMessage.error(error?.message || '排序调整失败')
   }
@@ -403,8 +500,8 @@ function buildEChartsTree(items) {
 
   // 1. 初始化 Map
   items.forEach(item => {
-    // 截断过长文本
-    const label = item.content.length > 15 ? item.content.substring(0, 15) + '...' : item.content
+    const raw = (item.content || '').replace(/\s+/g, ' ').trim()
+    const label = raw.length > 18 ? raw.substring(0, 18) + '...' : raw
     nodeMap[item.node_id] = { 
       name: `${item.role === 'user' ? '用户' : 'AI'}\n${label}`,
       id: item.node_id, // 存储真实ID用于点击
@@ -451,6 +548,25 @@ function buildEChartsTree(items) {
   }
 }
 
+const computeTreeLayoutStats = (root) => {
+  const levelCounts = []
+  let maxDepth = 0
+
+  const walk = (node, depth) => {
+    if (!node) return
+    if (!levelCounts[depth]) levelCounts[depth] = 0
+    levelCounts[depth] += 1
+    maxDepth = Math.max(maxDepth, depth)
+    for (const child of node.children || []) {
+      walk(child, depth + 1)
+    }
+  }
+
+  walk(root, 0)
+  const maxBreadth = levelCounts.length ? Math.max(...levelCounts) : 1
+  return { maxDepth, maxBreadth }
+}
+
 // 初始化 ECharts
 const initEChartsTree = (data) => {
   const chartDom = document.getElementById('echarts-tree-container')
@@ -462,6 +578,12 @@ const initEChartsTree = (data) => {
   
   myChart = echarts.init(chartDom)
   
+  const { maxDepth, maxBreadth } = computeTreeLayoutStats(data)
+  const minNodeGap = 56
+  const minLayerPadding = 160
+  const estimatedWidth = Math.max(chartDom.clientWidth || 800, maxBreadth * (140 + minNodeGap) + 320)
+  const estimatedHeight = Math.max(chartDom.clientHeight || 600, (maxDepth + 1) * minLayerPadding + 240)
+
   const option = {
     tooltip: {
       trigger: 'item',
@@ -486,12 +608,19 @@ const initEChartsTree = (data) => {
       {
         type: 'tree',
         data: [data],
-        top: '5%',
-        left: '15%', // 留出左边距
-        bottom: '5%',
-        right: '20%',
+        top: 24,
+        left: 24,
+        bottom: 24,
+        right: 24,
+        width: estimatedWidth,
+        height: estimatedHeight,
         symbolSize: 7,
         orient: 'TB', // 从上到下 (Top-Bottom)
+        layout: 'orthogonal',
+        nodeGap: minNodeGap,
+        layerPadding: minLayerPadding,
+        roam: true,
+        scaleLimit: { min: 0.2, max: 2.5 },
         
         // 连接线样式
         itemStyle: {
@@ -994,17 +1123,32 @@ const formatSize = (bytes) => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
 }
 
+const signedUrlTasks = new Map()
+
+const isPdfAttachment = (att) => {
+  const mime = (att?.mime || '').toLowerCase()
+  const name = (att?.filename || att?.name || '').toLowerCase()
+  return mime === 'application/pdf' || name.endsWith('.pdf')
+}
+
 const ensureSignedUrl = async (att) => {
   if (att.url) return att.url
   if (!att.id) return null
+  const existingTask = signedUrlTasks.get(att.id)
+  if (existingTask) return await existingTask
   try {
-    const res = await getAttachmentSignedUrl(att.id)
-    att.url = res.url
-    att.expires_at = res.expires_at
-    return att.url
+    const task = getAttachmentSignedUrl(att.id).then((res) => {
+      att.url = res.url
+      att.expires_at = res.expires_at
+      return att.url
+    })
+    signedUrlTasks.set(att.id, task)
+    return await task
   } catch (e) {
     ElMessage.error('获取附件链接失败')
     return null
+  } finally {
+    signedUrlTasks.delete(att.id)
   }
 }
 
@@ -1019,6 +1163,28 @@ const getAttachmentSrc = (att) => {
   if (att.base64) return `data:${att.mime || 'application/octet-stream'};base64,${att.base64}`
   return ''
 }
+
+watch(chatHistory, async (messages) => {
+  try {
+    const tasks = []
+    for (const msg of messages || []) {
+      for (const att of msg?.attachments || []) {
+        if (!att) continue
+        if (att.url || att.base64) continue
+        if (!att.id) continue
+        const isImage = (att.mime || '').startsWith('image/') || att.type === 'image'
+        const isVideo = (att.mime || '').startsWith('video/') || att.type === 'video'
+        if (!isImage && !isVideo) continue
+        tasks.push(ensureSignedUrl(att))
+      }
+    }
+    if (tasks.length > 0) {
+      await Promise.allSettled(tasks)
+    }
+  } catch (e) {
+    console.error('预拉取附件链接失败:', e)
+  }
+}, { deep: true, immediate: true })
 
 // 辅助方法
 const scrollToBottom = () => {
@@ -1112,6 +1278,10 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
            <el-icon><Share /></el-icon>
         </el-button>
 
+        <el-button circle @click="showConversationInstructions = true" title="会话指令" style="margin-right: 12px;">
+          <el-icon><Setting /></el-icon>
+        </el-button>
+
         <!-- 用户头像下拉菜单 -->
         <el-dropdown trigger="click" @command="(cmd) => cmd === 'logout' && handleLogout()">
           <el-avatar :size="32" class="user-avatar cursor-pointer" style="margin-left: 12px">U</el-avatar>
@@ -1157,11 +1327,28 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
               <div v-else class="user-text">
                 <div v-if="msg.content">{{ msg.content }}</div>
                 <div v-if="msg.attachments && msg.attachments.length > 0" class="message-attachments">
-                  <a v-for="att in msg.attachments" :key="att.id || att.storage_key || att.name" class="att-item" href="#" @click.prevent="openAttachment(att)">
-                    <img v-if="(att.mime || '').startsWith('image/') || att.type === 'image'" class="att-thumb" :src="getAttachmentSrc(att)" />
-                    <video v-else-if="(att.mime || '').startsWith('video/') || att.type === 'video'" class="att-video" :src="getAttachmentSrc(att)" controls />
-                    <span v-else class="att-file">{{ att.filename || att.name }}</span>
-                  </a>
+                  <div v-for="att in msg.attachments" :key="att.id || att.storage_key || att.name" class="att-item" @click="openAttachment(att)">
+                    <img
+                      v-if="(att.mime || '').startsWith('image/') || att.type === 'image'"
+                      class="att-thumb"
+                      :src="getAttachmentSrc(att)"
+                    />
+                    <video
+                      v-else-if="(att.mime || '').startsWith('video/') || att.type === 'video'"
+                      class="att-thumb"
+                      :src="getAttachmentSrc(att)"
+                      muted
+                      playsinline
+                      preload="metadata"
+                    />
+                    <div v-else class="att-icon">
+                      <el-icon><Document /></el-icon>
+                    </div>
+                    <div class="att-meta">
+                      <div class="att-name" :title="att.filename || att.name">{{ att.filename || att.name }}</div>
+                      <div class="att-sub">{{ (att.mime || '').toLowerCase() || (isPdfAttachment(att) ? 'application/pdf' : 'file') }}</div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1285,6 +1472,50 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
       <div id="echarts-tree-container" class="tree-container"></div>
     </el-dialog>
 
+    <el-dialog v-model="showConversationInstructions" title="会话指令" width="520px">
+      <div class="settings-section">
+        <h3>添加指令</h3>
+        <el-input
+          v-model="conversationInstructionInput"
+          type="textarea"
+          :rows="4"
+          placeholder="仅对当前会话生效；会拼接进 system prompt"
+          style="margin-bottom: 10px"
+        />
+        <el-button
+          type="primary"
+          :loading="isConversationInstructionSubmitting"
+          @click="handleAddConversationInstruction"
+          style="width: 100%"
+        >
+          添加
+        </el-button>
+
+        <h3 style="margin-top: 20px">指令列表</h3>
+        <el-table :data="conversationInstructions" style="width: 100%" max-height="320" v-loading="isConversationInstructionsLoading">
+          <el-table-column prop="content" label="内容" />
+          <el-table-column label="操作" width="170">
+            <template #default="scope">
+              <el-button link size="small" @click="moveConversationInstructionUp(scope.row)" :disabled="scope.$index === 0">
+                上移
+              </el-button>
+              <el-button
+                link
+                size="small"
+                @click="moveConversationInstructionDown(scope.row)"
+                :disabled="scope.$index === conversationInstructions.length - 1"
+              >
+                下移
+              </el-button>
+              <el-button link type="danger" size="small" @click="handleDeleteConversationInstruction(scope.row)">
+                删除
+              </el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+    </el-dialog>
+
     <!-- 设置弹窗 -->
     <el-dialog v-model="showSettings" title="设置" width="500px">
       <el-tabs v-model="settingsActiveTab">
@@ -1370,7 +1601,8 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
 /* 树状图样式 */
 .tree-container {
   width: 100%;
-  height: 600px;
+  height: 80vh;
+  min-height: 600px;
   overflow: hidden;
 }
 
@@ -1727,37 +1959,59 @@ $hover-color: #e3e3e3;
         .att-item {
           display: inline-flex;
           align-items: center;
-          gap: 6px;
-          padding: 6px 8px;
+          gap: 8px;
+          max-width: 320px;
+          padding: 8px 10px;
           border: 1px solid #e0e0e0;
           border-radius: 10px;
           background: #fff;
-          text-decoration: none;
+          cursor: pointer;
           color: inherit;
-          max-width: 260px;
+          overflow: hidden;
         }
 
         .att-thumb {
-          width: 64px;
-          height: 48px;
-          object-fit: cover;
+          width: 72px;
+          height: 54px;
           border-radius: 8px;
           border: 1px solid #eee;
-          background: #fafafa;
+          background: #f6f7f8;
+          object-fit: cover;
           flex-shrink: 0;
         }
 
-        .att-video {
-          width: 200px;
-          max-width: 100%;
-          border-radius: 10px;
+        .att-icon {
+          width: 72px;
+          height: 54px;
+          border-radius: 8px;
           border: 1px solid #eee;
-          background: #000;
+          background: #f6f7f8;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #666;
+          flex-shrink: 0;
         }
 
-        .att-file {
+        .att-meta {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+          min-width: 0;
+        }
+
+        .att-name {
           font-size: 13px;
-          color: #1967d2;
+          font-weight: 600;
+          color: #1f1f1f;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .att-sub {
+          font-size: 12px;
+          color: #666;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
