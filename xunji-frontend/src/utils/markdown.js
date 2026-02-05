@@ -13,12 +13,12 @@ const md = new MarkdownIt({
     // 自动代码高亮逻辑
     if (lang && hljs.getLanguage(lang)) {
       try {
-        return '<pre class="hljs"><code>' +
+        return '<div class="code-block"><button class="copy-code-btn" type="button">复制</button><pre class="hljs"><code>' +
                hljs.highlight(str, { language: lang, ignoreIllegals: true }).value +
-               '</code></pre>';
+               '</code></pre></div>';
       } catch (__) {}
     }
-    return '<pre class="hljs"><code>' + md.utils.escapeHtml(str) + '</code></pre>';
+    return '<div class="code-block"><button class="copy-code-btn" type="button">复制</button><pre class="hljs"><code>' + md.utils.escapeHtml(str) + '</code></pre></div>';
   }
 })
 

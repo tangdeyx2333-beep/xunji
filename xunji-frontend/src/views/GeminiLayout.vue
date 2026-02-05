@@ -76,8 +76,12 @@ const currentConversationId = ref(null)
 
 // 计算属性：当前是否正在发送
 const isSending = computed(() => {
-  if (!currentConversationId.value) return false // 新会话（未创建ID前）暂时不支持并发锁（或者需要另外处理）
-  return sessionCache[currentConversationId.value]?.isSending || false
+  const parentKey = (currentLeafId.value || 'root')
+  if (!currentConversationId.value) {
+    return !!tempNewSessionState.sendingByParent?.[parentKey]
+  }
+  const state = sessionCache[currentConversationId.value]
+  return !!state?.sendingByParent?.[parentKey]
 })
 
 // 计算属性：当前是否在聊天中（用于显示欢迎页）
@@ -111,7 +115,9 @@ const currentLeafId = computed({
 // 我们需要一个临时的 storage，等到第一条消息发送成功获得 session_id 后，再迁移到 sessionCache
 const tempNewSessionState = reactive({
   messages: [],
-  currentLeafId: null
+  currentLeafId: null,
+  isSending: false,
+  sendingByParent: {}
 })
 
 // 修改 chatHistory 的计算逻辑以支持新会话
@@ -403,6 +409,7 @@ const switchSession = async (session) => {
   sessionCache[session.id] = {
     messages: [],
     isSending: false,
+    sendingByParent: {},
     currentLeafId: null,
     scrollTop: 0
   }
@@ -444,6 +451,8 @@ const startNewChat = () => {
   // 重置临时状态
   tempNewSessionState.messages = []
   tempNewSessionState.currentLeafId = null
+  tempNewSessionState.isSending = false
+  tempNewSessionState.sendingByParent = {}
   
   inputMessage.value = ''
   selectedFileIds.value = []
@@ -794,12 +803,45 @@ const handleCopy = async (text) => {
   }
 }
 
+const handleMarkdownClick = async (e) => {
+  const btn = e?.target?.closest?.('.copy-code-btn')
+  if (!btn) return
+  const container = btn.closest('.code-block')
+  const codeEl = container?.querySelector?.('pre code')
+  const text = (codeEl?.textContent || '').trimEnd()
+  if (!text) return
+  await handleCopy(text)
+  const prev = btn.textContent
+  btn.textContent = '已复制'
+  window.setTimeout(() => {
+    btn.textContent = prev
+  }, 1200)
+}
+
+const getParentKey = (parentId) => parentId || 'root'
+
+const beginSending = (sessionState, parentKey) => {
+  if (!sessionState.sendingByParent) sessionState.sendingByParent = {}
+  sessionState.sendingByParent[parentKey] = (sessionState.sendingByParent[parentKey] || 0) + 1
+  sessionState.isSending = true
+}
+
+const endSending = (sessionState, parentKey) => {
+  if (!sessionState?.sendingByParent) {
+    sessionState.isSending = false
+    return
+  }
+  const nextVal = (sessionState.sendingByParent[parentKey] || 0) - 1
+  if (nextVal > 0) sessionState.sendingByParent[parentKey] = nextVal
+  else delete sessionState.sendingByParent[parentKey]
+  sessionState.isSending = Object.keys(sessionState.sendingByParent).length > 0
+}
+
 // ★★★ 发送消息核心逻辑 (改为流式调用) ★★★
 const sendMessage = async () => {
   const text = inputMessage.value.trim()
   const attachmentsSnapshot = [...currentAttachments.value]
   if (!text && attachmentsSnapshot.length === 0) return
-  if (isSending.value) return // 防止重复发送
 
   // --- 1. 确定当前操作的会话上下文 ---
   // 如果是新会话，操作 tempNewSessionState
@@ -812,20 +854,24 @@ const sendMessage = async () => {
   } else {
     // 确保缓存存在 (理论上 switchSession 已经保证了，但做个兜底)
     if (!sessionCache[currentConversationId.value]) {
-       sessionCache[currentConversationId.value] = { messages: [], isSending: false, currentLeafId: null }
+       sessionCache[currentConversationId.value] = { messages: [], isSending: false, sendingByParent: {}, currentLeafId: null }
     }
     activeSessionState = sessionCache[currentConversationId.value]
   }
+
+  const parentKeyAtSend = getParentKey(activeSessionState.currentLeafId)
+  if (isNewSession) {
+    if (activeSessionState.isSending) return
+  } else {
+    if (activeSessionState.sendingByParent?.[parentKeyAtSend]) return
+  }
+
+  beginSending(activeSessionState, parentKeyAtSend)
 
   // --- 2. 用户消息上屏 ---
   activeSessionState.messages.push({ role: 'user', content: text, attachments: attachmentsSnapshot })
   inputMessage.value = ''
   currentAttachments.value = []
-  
-  // 设置发送状态 (注意：对于新会话，这里设置的是临时变量，暂时没用 computed 追踪它，但没关系)
-  if (!isNewSession) {
-     activeSessionState.isSending = true 
-  }
   
   scrollToBottom()
 
@@ -854,6 +900,16 @@ const sendMessage = async () => {
   
   // 保存发起请求时的 Session ID，用于闭包中判断是否还是当前视图
   const requestSessionId = currentConversationId.value
+
+  let ended = false
+  const endOnce = () => {
+    if (ended) return
+    ended = true
+    const targetState = isNewSession
+      ? (currentConversationId.value ? sessionCache[currentConversationId.value] : tempNewSessionState)
+      : activeSessionState
+    endSending(targetState, parentKeyAtSend)
+  }
 
   await chatStream(
     payload,
@@ -886,15 +942,7 @@ const sendMessage = async () => {
     () => {
       aiMessage.loading = false
       aiMessage.done = true 
-      
-      // 确保 isSending 被重置
-      if (isNewSession) {
-          if (currentConversationId.value && sessionCache[currentConversationId.value]) {
-              sessionCache[currentConversationId.value].isSending = false
-          }
-      } else {
-         activeSessionState.isSending = false
-      }
+      endOnce()
       
       // 如果是新会话，流结束后刷新列表以显示新标题
       if (isNewSession) {
@@ -905,14 +953,7 @@ const sendMessage = async () => {
     (err) => {
       aiMessage.loading = false
       aiMessage.done = true
-      
-      if (isNewSession) {
-          if (currentConversationId.value && sessionCache[currentConversationId.value]) {
-              sessionCache[currentConversationId.value].isSending = false
-          }
-      } else {
-         activeSessionState.isSending = false
-      }
+      endOnce()
 
       aiMessage.html += `<br><span style="color:red">[网络错误: ${err.message}]</span>`
     },
@@ -927,10 +968,16 @@ const sendMessage = async () => {
            // 2. 初始化缓存
            sessionCache[meta.session_id] = {
              messages: [...tempNewSessionState.messages], // 迁移临时消息
-             isSending: true, // 继承发送状态
+             isSending: true,
+             sendingByParent: { [parentKeyAtSend]: 1 },
              currentLeafId: null,
              scrollTop: 0
            }
+
+           tempNewSessionState.messages = []
+           tempNewSessionState.currentLeafId = null
+           tempNewSessionState.isSending = false
+           tempNewSessionState.sendingByParent = {}
            
            // 3. 将 activeSessionState 指向新缓存，确保后续闭包更新正确对象
            // 注意：这一步其实不需要，因为 aiMessage 是 reactive 对象，引用没变。
@@ -960,27 +1007,9 @@ const sendMessage = async () => {
              // 提前结束 Loading 状态，恢复发送按钮
              aiMessage.loading = false
              aiMessage.done = true 
-             if (!isNewSession) {
-                activeSessionState.isSending = false
-             }
-             // 注意：这里如果是新会话，我们可能还想等标题生成后再刷新列表，或者现在就刷新也行
-             // 但为了体验更流畅，我们在这里先不置 isSending = false (针对新会话)，
-             // 或者我们可以允许用户继续操作，标题更新在后台静默完成。
-             
-             // 策略：新会话也立即解锁
-             if (isNewSession) {
-                 // ★ 修复：如果是新会话，此时 activeSessionState 还是 tempNewSessionState
-                 // 但 isSending 计算属性依赖的是 sessionCache[currentConversationId]
-                 // 所以必须显式更新 sessionCache 中的状态
-                 if (currentConversationId.value && sessionCache[currentConversationId.value]) {
-                     sessionCache[currentConversationId.value].isSending = false
-                 }
-                 
-                 // 先刷新一次列表，显示“新对话”
-                 fetchSessionList()
-             } else {
-                 activeSessionState.isSending = false
-             }
+             endOnce()
+
+             if (isNewSession) fetchSessionList()
           }
           if (meta.user_attachments_saved && Array.isArray(meta.user_attachments_saved)) {
              const msgs = targetSessionState.messages || []
@@ -1315,7 +1344,7 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
               <div v-if="msg.role === 'ai'" class="markdown-body">
                 <div v-if="msg.loading && !msg.html" class="typing-indicator"><span></span><span></span><span></span></div>
                 <div v-else>
-                   <div v-html="msg.html"></div>
+                   <div v-html="msg.html" @click="handleMarkdownClick"></div>
                    <!-- 复制按钮 -->
                    <div v-if="msg.done" class="message-actions">
                      <el-button type="primary" plain size="small" @click="handleCopy(msg.content)">
@@ -2040,6 +2069,29 @@ $hover-color: #e3e3e3;
 :deep(.markdown-body) {
   p {
     margin-bottom: 10px;
+  }
+
+  .code-block {
+    position: relative;
+  }
+
+  .copy-code-btn {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    font-size: 12px;
+    line-height: 1;
+    padding: 6px 8px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.35);
+    color: rgba(255, 255, 255, 0.92);
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .copy-code-btn:hover {
+    background: rgba(0, 0, 0, 0.5);
   }
 
   pre {
