@@ -8,14 +8,16 @@ from app.db.session import init_db
 # 初始化数据库
 init_db()
 # 1. 创建应用
-app = FastAPI(title="知微 (ZhiWei) RAG API")
+app = FastAPI(title="循迹 (xunji) RAG API")
 
 # 2. 配置跨域 (CORS) - 这一步对前后端分离非常重要！
 # 允许 Vue (通常是 localhost:5173 或 8080) 访问
 origins = [
-    "http://localhost:5173",  # Vue 默认端口
-    "http://localhost:8080",
-    "http://127.0.0.1:5173"
+    # "http://localhost:5173",  # Vue 默认端口
+    # "http://localhost:8080",
+    # "http://127.0.0.1:5173",
+    # "http://0.0.0.0:*",
+    "*"
 ]
 app.add_middleware(
     CORSMiddleware,

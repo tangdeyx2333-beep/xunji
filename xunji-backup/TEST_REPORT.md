@@ -15,6 +15,7 @@
 - **数据库**：SQLite（内存模式）
 - **Python版本**：3.12.7
 - **测试文件**：`tests/test_instructions.py`
+- **回归测试**：执行全量 pytest（包含 `tests/test_sqlalchemy_sqlite_url.py`），用于验证 SQLite 数据库路径归一化与父目录自动创建不会影响现有功能。
 
 ## 测试用例清单
 

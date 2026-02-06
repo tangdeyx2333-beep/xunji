@@ -159,6 +159,8 @@ def _get_user_instructions(self, db: Session, user_id: str) -> str:
 
 本功能不依赖额外的环境变量，使用现有的数据库配置即可。
 
+另外需要注意：当 `SQLALCHEMY_DATABASE_URL` 使用 SQLite 文件路径（例如 `sqlite:///../database/xunji.db`）时，SQLite 只能创建“文件”，不能自动创建“父目录”。后端已在启动阶段对 SQLite URL 做了路径归一化，并在需要时自动创建数据库文件所在的父目录，以避免因目录不存在导致启动失败。
+
 ### 可选配置
 
 #### 1. 指令长度限制
