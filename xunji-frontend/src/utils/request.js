@@ -42,6 +42,12 @@ service.interceptors.response.use(
     if (error.response) {
       const status = error.response.status
       const msg = error.response.data.detail || '请求失败'
+      const requestUrl = error.config?.url || ''
+      const isLoginRequest = requestUrl.includes('/api/auth/login')
+
+      if (isLoginRequest) {
+        return Promise.reject(error)
+      }
 
       if (status === 401) {
         // Token 过期或未登录

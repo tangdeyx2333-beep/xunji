@@ -24,10 +24,12 @@ export const useUserStore = defineStore('user', () => {
       localStorage.setItem('access_token', res.access_token)
       localStorage.setItem('user_info', JSON.stringify(userInfo.value))
       
-      return true // 登录成功
+      return { success: true } // 登录成功
     } catch (error) {
-      console.error('Login failed:', error)
-      return false
+      const status = error?.response?.status
+      const detail = error?.response?.data?.detail
+      const message = status === 401 ? '用户名或密码错误' : (detail || '登录失败，请稍后再试')
+      return { success: false, message }
     }
   }
 
