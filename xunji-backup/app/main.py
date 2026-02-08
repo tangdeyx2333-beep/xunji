@@ -1,9 +1,15 @@
+import os
+import sys
+import time
+
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.endpoints import chat, upload, retrieval, history, auth, models, attachments, instructions
+
+from app.api.endpoints import chat, upload, retrieval, history, auth, models, attachments, instructions, openclaw
 from app.db.session import init_db
 
-
+load_dotenv()
 
 # 初始化数据库
 init_db()
@@ -39,6 +45,7 @@ app.include_router(attachments.router, prefix="/api", tags=["Attachments"]) # �
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"]) # ★ 注册
 app.include_router(models.router, prefix="/api", tags=["Models"]) # ★ 模型管理
 app.include_router(instructions.router, prefix="/api", tags=["Instructions"]) # ★ AI 指令
+app.include_router(openclaw.router, prefix="/api/openclaw", tags=["OpenClaw"]) # ★ OpenClaw 独立接口
 # 4. 根路径测试
 @app.get("/")
 def root():
@@ -49,3 +56,4 @@ if __name__ == "__main__":
     import uvicorn
     # 对应 Java 的 SpringApplication.run()
     uvicorn.run(app, host="127.0.0.1", port=8080)
+
