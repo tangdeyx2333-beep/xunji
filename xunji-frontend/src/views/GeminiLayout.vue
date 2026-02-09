@@ -7,10 +7,11 @@ import {
   Compass, DataLine, Trophy, Collection,
   Connection,
   Document, Paperclip, ArrowDown, Delete,
-  Share, CopyDocument, Position, Loading, SwitchButton, Close, UploadFilled // 引入新图标
+  Share, CopyDocument, Position, Loading, SwitchButton, Close, UploadFilled, Service // 引入新图标
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
+import { openClawChatStream, connectOpenClaw } from '@/api/openclaw'
 
 // --- API --- API ---
 import { getFiles, uploadFile, deleteFile, clearKnowledgeBase } from '@/api/file'
@@ -63,6 +64,22 @@ const aiInstructionInput = ref('')
 const aiInstructions = ref([])
 const isInstructionsLoading = ref(false)
 const isInstructionSubmitting = ref(false)
+
+// --- OpenClaw 配置 ---
+const openClawForm = reactive({
+  gateway_url: 'ws://127.0.0.1:18789',
+  session_key: 'agent:main:main',
+  auth_type: 'token', // 'token' or 'password'
+  gateway_token: '',
+  gateway_password: '',
+  use_ssh: false,
+  ssh_host: '',
+  ssh_port: 22,
+  ssh_user: '',
+  ssh_password: '',
+  ssh_local_port: 0
+})
+const isOpenClawConnecting = ref(false)
 
 const conversationInstructionInput = ref('')
 const conversationInstructions = ref([])
@@ -129,6 +146,164 @@ const displayMessages = computed(() => {
 })
 
 const historyList = ref([])
+
+const isOpenClawMode = ref(false)
+const openClawState = reactive({
+  messages: [],
+  isSending: false,
+})
+const lastNormalConversationId = ref(null)
+
+const viewTitle = computed(() => {
+  return isOpenClawMode.value ? 'OpenClaw' : currentModel.value
+})
+
+const viewMessages = computed(() => {
+  return isOpenClawMode.value ? openClawState.messages : displayMessages.value
+})
+
+const isChattingView = computed(() => {
+  return viewMessages.value.length > 0
+})
+
+const isSendingView = computed(() => {
+  return isOpenClawMode.value ? openClawState.isSending : isSending.value
+})
+
+const enterOpenClawMode = async () => {
+  if (isOpenClawMode.value) return
+  lastNormalConversationId.value = currentConversationId.value
+  isOpenClawMode.value = true
+
+  openClawState.messages = []
+  openClawState.isSending = false
+  inputMessage.value = ''
+  currentAttachments.value = []
+  selectedFileIds.value = []
+
+  openClawState.messages.push({
+    role: 'ai',
+    content: '你好，我是 OpenClaw。有什么可以帮您？',
+    html: renderMarkdown('你好，我是 OpenClaw。有什么可以帮您？'),
+    loading: false,
+    done: true,
+  })
+
+  scrollToBottom()
+}
+
+const exitOpenClawMode = async () => {
+  if (!isOpenClawMode.value) return
+  isOpenClawMode.value = false
+
+  inputMessage.value = ''
+  currentAttachments.value = []
+
+  if (lastNormalConversationId.value) {
+    await switchSession({ id: lastNormalConversationId.value })
+  } else {
+    startNewChat()
+  }
+}
+
+const sendMessageToOpenClaw = async () => {
+  const text = inputMessage.value.trim()
+  if (!text || openClawState.isSending) return
+
+  openClawState.messages.push({ role: 'user', content: text, loading: false, done: true })
+  inputMessage.value = ''
+  currentAttachments.value = []
+
+  scrollToBottom()
+
+  const aiMessage = reactive({
+    role: 'ai',
+    content: '',
+    html: '',
+    loading: true,
+    done: false,
+  })
+  openClawState.messages.push(aiMessage)
+  scrollToBottom()
+
+  openClawState.isSending = true
+
+  await openClawChatStream(
+    { message: text, user_id: userStore.userInfo?.id },
+    (chunk) => {
+      aiMessage.loading = false
+      aiMessage.content += chunk
+      aiMessage.html = renderMarkdown(aiMessage.content)
+      scrollToBottom()
+    },
+    () => {
+      aiMessage.loading = false
+      aiMessage.done = true
+      openClawState.isSending = false
+      scrollToBottom()
+    },
+    (err) => {
+      aiMessage.loading = false
+      aiMessage.done = true
+      aiMessage.content += `\n[错误: ${err.message}]`
+      aiMessage.html = renderMarkdown(aiMessage.content)
+      openClawState.isSending = false
+      scrollToBottom()
+      
+      // 如果是未配置错误，自动跳转设置
+      if (err.message.includes('未配置') || err.message.includes('前往设置')) {
+         showSettings.value = true
+         settingsActiveTab.value = 'openclaw'
+      }
+    }
+  )
+}
+
+// --- OpenClaw 连接逻辑 ---
+const handleConnectOpenClaw = async () => {
+  if (!openClawForm.gateway_url || !openClawForm.session_key) {
+    ElMessage.warning('请填写网关地址和会话 Key')
+    return
+  }
+  if (openClawForm.auth_type === 'token' && !openClawForm.gateway_token) {
+    ElMessage.warning('请填写 Token')
+    return
+  }
+  if (openClawForm.auth_type === 'password' && !openClawForm.gateway_password) {
+    ElMessage.warning('请填写密码')
+    return
+  }
+  if (openClawForm.use_ssh) {
+    if (!openClawForm.ssh_host || !openClawForm.ssh_user || !openClawForm.ssh_password) {
+      ElMessage.warning('请填写完整的 SSH 信息')
+      return
+    }
+  }
+
+  try {
+    isOpenClawConnecting.value = true
+    const payload = {
+      user_id: userStore.userInfo?.id,
+      gateway_url: openClawForm.gateway_url,
+      session_key: openClawForm.session_key,
+      gateway_token: openClawForm.auth_type === 'token' ? openClawForm.gateway_token : undefined,
+      gateway_password: openClawForm.auth_type === 'password' ? openClawForm.gateway_password : undefined,
+      use_ssh: openClawForm.use_ssh,
+      ssh_host: openClawForm.use_ssh ? openClawForm.ssh_host : undefined,
+      ssh_port: openClawForm.use_ssh ? Number(openClawForm.ssh_port) : 22,
+      ssh_user: openClawForm.use_ssh ? openClawForm.ssh_user : undefined,
+      ssh_password: openClawForm.use_ssh ? openClawForm.ssh_password : undefined,
+      ssh_local_port: openClawForm.use_ssh ? Number(openClawForm.ssh_local_port || 0) : 0
+    }
+
+    await connectOpenClaw(payload)
+    ElMessage.success('OpenClaw 连接成功并已保存')
+  } catch (error) {
+    ElMessage.error(error.message || '连接失败')
+  } finally {
+    isOpenClawConnecting.value = false
+  }
+}
 
 // --- 4. RAG 文件逻辑 ---
 const selectedFileIds = ref([])
@@ -382,6 +557,13 @@ const fetchSessionList = async () => {
 }
 
 const switchSession = async (session) => {
+  if (isOpenClawMode.value) {
+    isOpenClawMode.value = false
+  }
+  // 确保设置界面和弹窗关闭
+  showSettings.value = false
+  showConversationInstructions.value = false
+  showChatTree.value = false
   if (currentConversationId.value === session.id) return
 
   // 1. 记录当前会话的滚动位置 (如果存在)
@@ -447,6 +629,13 @@ const switchSession = async (session) => {
 }
 
 const startNewChat = () => {
+  if (isOpenClawMode.value) {
+    isOpenClawMode.value = false
+  }
+  // 开始新会话前确保设置界面和弹窗关闭
+  showSettings.value = false
+  showConversationInstructions.value = false
+  showChatTree.value = false
   currentConversationId.value = null
   // 重置临时状态
   tempNewSessionState.messages = []
@@ -839,6 +1028,18 @@ const endSending = (sessionState, parentKey) => {
 
 // ★★★ 发送消息核心逻辑 (改为流式调用) ★★★
 const sendMessage = async () => {
+  // 发送消息前确保设置弹窗关闭
+  showConversationInstructions.value = false
+  
+  if (isOpenClawMode.value) {
+    if (currentAttachments.value.length > 0) {
+      ElMessage.warning('OpenClaw 模式暂不支持附件')
+      currentAttachments.value = []
+    }
+    await sendMessageToOpenClaw()
+    return
+  }
+
   const text = inputMessage.value.trim()
   const attachmentsSnapshot = [...currentAttachments.value]
   if (!text && attachmentsSnapshot.length === 0) return
@@ -1193,7 +1394,7 @@ const getAttachmentSrc = (att) => {
   return ''
 }
 
-watch(chatHistory, async (messages) => {
+watch(viewMessages, async (messages) => {
   try {
     const tasks = []
     for (const msg of messages || []) {
@@ -1286,46 +1487,216 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
     </aside>
 
     <main class="main-area">
-      <header class="top-bar">
-        <!-- 模型切换下拉菜单 -->
-        <el-dropdown trigger="click" @command="(cmd) => currentModel = cmd">
-          <span class="model-name cursor-pointer">
-            {{ currentModel }}
-            <el-icon class="el-icon--right"><ArrowDown /></el-icon>
-          </span>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item v-for="model in availableModels" :key="model.model_name" :command="model.model_name">
-                {{ model.display_name }}
-              </el-dropdown-item>
-            </el-dropdown-menu>
+      <!-- 设置页面 (嵌入式) -->
+      <div v-if="showSettings" class="settings-embedded-container">
+        <div class="settings-sidebar">
+          <h2 class="settings-title">Settings</h2>
+          <div class="settings-menu">
+            <div class="menu-item" :class="{ active: settingsActiveTab === 'models' }" @click="settingsActiveTab = 'models'">
+              模型管理
+            </div>
+            <div class="menu-item" :class="{ active: settingsActiveTab === 'instructions' }" @click="settingsActiveTab = 'instructions'">
+              AI 指令
+            </div>
+            <div class="menu-item" :class="{ active: settingsActiveTab === 'openclaw' }" @click="settingsActiveTab = 'openclaw'">
+              OpenClaw
+            </div>
+          </div>
+        </div>
+        <div class="settings-content">
+          <!-- 模型管理 -->
+          <div v-if="settingsActiveTab === 'models'" class="settings-panel">
+            <h3>添加新模型</h3>
+            <div class="add-model-form">
+              <el-input v-model="newModelForm.model_name" placeholder="模型ID (如 gpt-4)" style="margin-bottom: 10px" />
+              <el-input v-model="newModelForm.display_name" placeholder="显示名称 (如 GPT-4)" style="margin-bottom: 10px" />
+              <el-button type="primary" @click="handleAddModel" style="width: 100%">添加</el-button>
+            </div>
+
+            <h3 style="margin-top: 20px">可用模型列表</h3>
+            <el-table :data="availableModels" style="width: 100%" max-height="400">
+              <el-table-column prop="display_name" label="名称" />
+              <el-table-column prop="model_name" label="ID" />
+              <el-table-column label="操作" width="80">
+                <template #default="scope">
+                  <el-button 
+                    v-if="scope.row.is_custom" 
+                    link 
+                    type="danger" 
+                    @click="handleDeleteModel(scope.row)"
+                  >
+                    删除
+                  </el-button>
+                  <span v-else style="color: #999; font-size: 12px">默认</span>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+
+          <!-- AI 指令 -->
+          <div v-if="settingsActiveTab === 'instructions'" class="settings-panel">
+            <h3>添加指令</h3>
+            <el-input
+              v-model="aiInstructionInput"
+              type="textarea"
+              :rows="4"
+              placeholder="例如：请用简洁中文回答；先给结论再解释；代码请给可运行示例"
+              style="margin-bottom: 10px"
+            />
+            <el-button
+              type="primary"
+              :loading="isInstructionSubmitting"
+              @click="handleAddInstruction"
+              style="width: 100%"
+            >
+              添加
+            </el-button>
+
+            <h3 style="margin-top: 20px">指令列表</h3>
+            <el-table :data="aiInstructions" style="width: 100%" max-height="400" v-loading="isInstructionsLoading">
+              <el-table-column prop="content" label="内容" />
+              <el-table-column label="操作" width="170">
+                <template #default="scope">
+                  <el-button link size="small" @click="moveInstructionUp(scope.row)" :disabled="scope.$index === 0">
+                    上移
+                  </el-button>
+                  <el-button
+                    link
+                    size="small"
+                    @click="moveInstructionDown(scope.row)"
+                    :disabled="scope.$index === aiInstructions.length - 1"
+                  >
+                    下移
+                  </el-button>
+                  <el-button link type="danger" size="small" @click="handleDeleteInstruction(scope.row)">
+                    删除
+                  </el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+
+          <!-- OpenClaw -->
+          <div v-if="settingsActiveTab === 'openclaw'" class="settings-panel">
+            <h3>OpenClaw 连接配置</h3>
+            <el-form label-position="top" label-width="100px" style="max-width: 460px;">
+              <el-form-item label="Gateway URL">
+                <el-input v-model="openClawForm.gateway_url" placeholder="ws://127.0.0.1:18789" />
+              </el-form-item>
+              <el-form-item label="Session Key">
+                <el-input v-model="openClawForm.session_key" placeholder="agent:main:main" />
+              </el-form-item>
+              
+              <el-form-item label="鉴权方式">
+                <el-radio-group v-model="openClawForm.auth_type">
+                  <el-radio label="token">Token</el-radio>
+                  <el-radio label="password">Password</el-radio>
+                </el-radio-group>
+              </el-form-item>
+              
+              <el-form-item v-if="openClawForm.auth_type === 'token'" label="Token">
+                <el-input v-model="openClawForm.gateway_token" placeholder="请输入 Gateway Token" type="password" show-password />
+              </el-form-item>
+              <el-form-item v-else label="Password">
+                <el-input v-model="openClawForm.gateway_password" placeholder="请输入 Gateway Password" type="password" show-password />
+              </el-form-item>
+
+              <el-divider content-position="left">高级设置</el-divider>
+              
+              <el-form-item label="启用 SSH 隧道">
+                <el-switch v-model="openClawForm.use_ssh" />
+              </el-form-item>
+
+              <template v-if="openClawForm.use_ssh">
+                <el-form-item label="SSH 主机 (IP)">
+                  <el-input v-model="openClawForm.ssh_host" placeholder="192.168.1.x" />
+                </el-form-item>
+                <el-form-item label="SSH 端口">
+                  <el-input v-model="openClawForm.ssh_port" placeholder="22" type="number" />
+                  <div class="setting-tip">通常为 22。如果远程服务通过 SSH 隧道转发，请确保这是远程服务器的 SSH 服务端口，而非 OpenClaw 端口。</div>
+                </el-form-item>
+                <el-collapse class="advanced-settings">
+                  <el-collapse-item title="高级设置" name="advanced">
+                    <el-form-item label="SSH 用户名">
+                      <el-input v-model="openClawForm.ssh_user" placeholder="root" />
+                    </el-form-item>
+                    <el-form-item label="SSH 密码">
+                      <el-input v-model="openClawForm.ssh_password" placeholder="请输入 SSH 密码" type="password" show-password />
+                    </el-form-item>
+                    <el-form-item label="本地映射端口 (0=随机)">
+                      <el-input v-model="openClawForm.ssh_local_port" placeholder="0" type="number" />
+                      <div class="setting-tip">本地临时占用的端口，建议保持 0。</div>
+                    </el-form-item>
+                  </el-collapse-item>
+                </el-collapse>
+              </template>
+
+              <el-form-item style="margin-top: 30px;">
+                <el-button type="primary" :loading="isOpenClawConnecting" @click="handleConnectOpenClaw" style="width: 100%; height: 40px; font-size: 16px;">
+                  连接并保存
+                </el-button>
+              </el-form-item>
+            </el-form>
+          </div>
+        </div>
+      </div>
+
+      <!-- 聊天主界面 -->
+      <div v-else class="chat-container-wrapper">
+        <header class="top-bar">
+          <template v-if="!isOpenClawMode">
+            <el-dropdown trigger="click" @command="(cmd) => currentModel = cmd">
+              <span class="model-name cursor-pointer">
+                {{ currentModel }}
+                <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </span>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item v-for="model in availableModels" :key="model.model_name" :command="model.model_name">
+                    {{ model.display_name }}
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </template>
-        </el-dropdown>
+
+          <template v-else>
+            <span class="model-name">{{ viewTitle }}</span>
+          </template>
         
-        <!-- 新增：聊天树按钮 -->
-        <el-button v-if="currentConversationId" circle @click="openChatTree" title="查看对话树" style="margin-right: 12px; margin-left: auto;">
-           <el-icon><Share /></el-icon>
-        </el-button>
+          <!-- 新增：聊天树按钮 -->
+          <el-button v-if="currentConversationId && !isOpenClawMode" circle @click="openChatTree" title="查看对话树" style="margin-right: 12px; margin-left: auto;">
+             <el-icon><Share /></el-icon>
+          </el-button>
 
-        <el-button circle @click="showConversationInstructions = true" title="会话指令" style="margin-right: 12px;">
-          <el-icon><Setting /></el-icon>
-        </el-button>
+          <el-button v-if="!isOpenClawMode" circle @click="showConversationInstructions = true" title="会话指令" style="margin-right: 12px;">
+            <el-icon><Setting /></el-icon>
+          </el-button>
 
-        <!-- 用户头像下拉菜单 -->
-        <el-dropdown trigger="click" @command="(cmd) => cmd === 'logout' && handleLogout()">
-          <el-avatar :size="32" class="user-avatar cursor-pointer" style="margin-left: 12px">U</el-avatar>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item command="logout" style="color: #f56c6c;">
-                <el-icon><SwitchButton /></el-icon> 注销
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
-      </header>
+          <!-- OpenClaw Button -->
+          <el-button circle @click="enterOpenClawMode" title="OpenClaw" style="margin-right: 12px;">
+             <el-icon><Service /></el-icon>
+          </el-button>
+
+          <el-button v-if="isOpenClawMode" @click="exitOpenClawMode" style="margin-right: 12px;">
+            退出
+          </el-button>
+
+          <!-- 用户头像下拉菜单 -->
+          <el-dropdown trigger="click" @command="(cmd) => cmd === 'logout' && handleLogout()">
+            <el-avatar :size="32" class="user-avatar cursor-pointer" style="margin-left: 12px">U</el-avatar>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="logout" style="color: #f56c6c;">
+                  <el-icon><SwitchButton /></el-icon> 注销
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </header>
 
       <div class="content-scroll-area" ref="chatContainerRef">
-        <div v-if="!isChatting" class="welcome-container">
+        <div v-if="!isChattingView" class="welcome-container">
           <div class="greeting">
             <h1 class="gradient-text">Hello, Developer</h1>
             <h1 class="sub-text">How can I help you today?</h1>
@@ -1333,7 +1704,7 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
         </div>
 
         <div v-else class="chat-list">
-          <div v-for="(msg, index) in chatHistory" :key="index" class="message" :class="msg.role">
+          <div v-for="(msg, index) in viewMessages" :key="index" class="message" :class="msg.role">
             <div class="avatar-col">
               <!-- 用户头像: 紫色背景 + 白色字母 -->
               <div v-if="msg.role === 'user'" class="avatar-circle user-theme">U</div>
@@ -1413,7 +1784,7 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
             v-model="inputMessage" 
             type="textarea" 
             :autosize="{ minRows: 1, maxRows: 8 }"
-            :placeholder="selectedCount > 0 ? `已引用 ${selectedCount} 个文件...` : '问问 xunji (支持粘贴图片/文件)'"
+            :placeholder="isOpenClawMode ? '问问 OpenClaw' : (selectedCount > 0 ? `已引用 ${selectedCount} 个文件...` : '问问 xunji (支持粘贴图片/文件)')"
             class="gemini-input" 
             resize="none" 
             @keydown.enter.exact.prevent="sendMessage"
@@ -1478,14 +1849,20 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
             <!-- 右侧工具: 搜索、发送 -->
             <div class="toolbar-right">
               <el-tooltip effect="dark" :content="enableSearch ? '联网搜索: 开' : '联网搜索: 关'" placement="top">
-                <el-button circle link class="search-btn" :class="{ 'is-active': enableSearch }" @click="enableSearch = !enableSearch">
+                <el-button circle link class="search-btn" :class="{ 'is-active': enableSearch }" :disabled="isOpenClawMode" @click="enableSearch = !enableSearch">
                   <el-icon :size="18"><Connection /></el-icon>
                 </el-button>
               </el-tooltip>
               
-              <el-button circle :type="inputMessage || currentAttachments.length > 0 ? 'primary' : ''" :disabled="(!inputMessage && currentAttachments.length === 0) && !isSending" @click="sendMessage" class="send-btn">
+              <el-button
+                circle
+                :type="inputMessage || currentAttachments.length > 0 ? 'primary' : ''"
+                :disabled="isSendingView || (!inputMessage && currentAttachments.length === 0)"
+                @click="sendMessage"
+                class="send-btn"
+              >
                 <el-icon :size="18">
-                  <Loading v-if="isSending" class="is-loading" />
+                  <Loading v-if="isSendingView" class="is-loading" />
                   <Position v-else />
                 </el-icon>
               </el-button>
@@ -1494,6 +1871,7 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
         </div>
         <div class="disclaimer">{{ APP_NAME }} may display inaccurate info.</div>
       </div>
+    </div>
     </main>
 
     <!-- 聊天树弹窗 -->
@@ -1501,7 +1879,7 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
       <div id="echarts-tree-container" class="tree-container"></div>
     </el-dialog>
 
-    <el-dialog v-model="showConversationInstructions" title="会话指令" width="520px">
+    <el-dialog v-model="showConversationInstructions" title="会话指令" width="520px" :modal="false" :close-on-click-modal="false" :destroy-on-close="true">
       <div class="settings-section">
         <h3>添加指令</h3>
         <el-input
@@ -1543,84 +1921,6 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
           </el-table-column>
         </el-table>
       </div>
-    </el-dialog>
-
-    <!-- 设置弹窗 -->
-    <el-dialog v-model="showSettings" title="设置" width="500px">
-      <el-tabs v-model="settingsActiveTab">
-        <el-tab-pane label="模型管理" name="models">
-          <div class="settings-section">
-            <h3>添加新模型</h3>
-            <div class="add-model-form">
-              <el-input v-model="newModelForm.model_name" placeholder="模型ID (如 gpt-4)" style="margin-bottom: 10px" />
-              <el-input v-model="newModelForm.display_name" placeholder="显示名称 (如 GPT-4)" style="margin-bottom: 10px" />
-              <el-button type="primary" @click="handleAddModel" style="width: 100%">添加</el-button>
-            </div>
-
-            <h3 style="margin-top: 20px">可用模型列表</h3>
-            <el-table :data="availableModels" style="width: 100%" max-height="300">
-              <el-table-column prop="display_name" label="名称" />
-              <el-table-column prop="model_name" label="ID" />
-              <el-table-column label="操作" width="80">
-                <template #default="scope">
-                  <el-button 
-                    v-if="scope.row.is_custom" 
-                    link 
-                    type="danger" 
-                    @click="handleDeleteModel(scope.row)"
-                  >
-                    删除
-                  </el-button>
-                  <span v-else style="color: #999; font-size: 12px">默认</span>
-                </template>
-              </el-table-column>
-            </el-table>
-          </div>
-        </el-tab-pane>
-        <el-tab-pane label="AI 指令" name="instructions">
-          <div class="settings-section">
-            <h3>添加指令</h3>
-            <el-input
-              v-model="aiInstructionInput"
-              type="textarea"
-              :rows="4"
-              placeholder="例如：请用简洁中文回答；先给结论再解释；代码请给可运行示例"
-              style="margin-bottom: 10px"
-            />
-            <el-button
-              type="primary"
-              :loading="isInstructionSubmitting"
-              @click="handleAddInstruction"
-              style="width: 100%"
-            >
-              添加
-            </el-button>
-
-            <h3 style="margin-top: 20px">指令列表</h3>
-            <el-table :data="aiInstructions" style="width: 100%" max-height="300" v-loading="isInstructionsLoading">
-              <el-table-column prop="content" label="内容" />
-              <el-table-column label="操作" width="170">
-                <template #default="scope">
-                  <el-button link size="small" @click="moveInstructionUp(scope.row)" :disabled="scope.$index === 0">
-                    上移
-                  </el-button>
-                  <el-button
-                    link
-                    size="small"
-                    @click="moveInstructionDown(scope.row)"
-                    :disabled="scope.$index === aiInstructions.length - 1"
-                  >
-                    下移
-                  </el-button>
-                  <el-button link type="danger" size="small" @click="handleDeleteInstruction(scope.row)">
-                    删除
-                  </el-button>
-                </template>
-              </el-table-column>
-            </el-table>
-          </div>
-        </el-tab-pane>
-      </el-tabs>
     </el-dialog>
 
   </div>
@@ -1850,6 +2150,112 @@ $hover-color: #e3e3e3;
   flex-direction: column;
   position: relative;
   background: $bg-main;
+}
+
+/* 嵌入式设置页样式 */
+.settings-embedded-container {
+  flex: 1;
+  display: flex;
+  background-color: $bg-main;
+  overflow: hidden;
+  height: 100%;
+}
+
+.settings-sidebar {
+  width: 240px;
+  border-right: 1px solid #e0e0e0;
+  padding: 30px 20px;
+  display: flex;
+  flex-direction: column;
+  background-color: #fafafa;
+
+  .settings-title {
+    font-size: 24px;
+    font-weight: 600;
+    margin-bottom: 30px;
+    color: $text-primary;
+  }
+
+  .settings-menu {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+
+    .menu-item {
+      padding: 10px 15px;
+      border-radius: 8px;
+      cursor: pointer;
+      color: $text-secondary;
+      font-size: 15px;
+      transition: all 0.2s;
+
+      &:hover {
+        background-color: #e8e8e8;
+        color: $text-primary;
+      }
+
+      &.active {
+        background-color: #e3e3e3;
+        color: $text-primary;
+        font-weight: 500;
+      }
+    }
+  }
+}
+
+.settings-content {
+  flex: 1;
+  padding: 40px 60px;
+  overflow-y: auto;
+
+  .settings-panel {
+    max-width: 800px;
+    margin: 0 auto;
+
+    h3 {
+      font-size: 20px;
+      margin-bottom: 24px;
+      font-weight: 500;
+      color: $text-primary;
+    }
+
+    .setting-tip {
+      font-size: 12px;
+      color: #909399;
+      line-height: 1.4;
+      margin-top: 4px;
+    }
+
+    .advanced-settings {
+      border: none;
+      margin-top: 10px;
+      
+      :deep(.el-collapse-item__header) {
+        border-bottom: none;
+        height: 32px;
+        color: #409eff;
+        font-size: 13px;
+      }
+      
+      :deep(.el-collapse-item__wrap) {
+        border-bottom: none;
+        background-color: transparent;
+      }
+
+      :deep(.el-collapse-item__content) {
+        padding-bottom: 10px;
+      }
+    }
+  }
+}
+
+/* 聊天主界面容器 */
+.chat-container-wrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
 }
 
 .top-bar {
@@ -2394,6 +2800,7 @@ $hover-color: #e3e3e3;
     color: $text-secondary;
   }
 }
+
 </style>
 
 <style lang="scss">

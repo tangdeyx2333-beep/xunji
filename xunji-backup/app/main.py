@@ -28,7 +28,7 @@ origins = [
 app.add_middleware(
     CORSMiddleware,
     # 允许的来源：允许前端地址，开发环境可以直接用 ["*"] 允许所有
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=["*"],
     allow_credentials=True, # 允许携带 Cookie/Token
     allow_methods=["*"],    # 允许所有方法 (GET, POST, PUT, DELETE...)
     allow_headers=["*"],    # 允许所有 Header (Authorization, Content-Type...)
@@ -53,7 +53,8 @@ def root():
 
 # 5. 启动代码 (仅在直接运行此文件时执行)
 if __name__ == "__main__":
+    port = int(os.getenv("PORT", 21801))
     import uvicorn
     # 对应 Java 的 SpringApplication.run()
-    uvicorn.run(app, host="127.0.0.1", port=8080)
+    uvicorn.run(app, host="127.0.0.1", port=port)
 

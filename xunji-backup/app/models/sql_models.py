@@ -31,6 +31,7 @@ class User(Base):
     # 关联关系
     conversations = relationship("Conversation", back_populates="user")
     files = relationship("FileRecord", back_populates="user")
+    openclaw_config = relationship("OpenClawConfig", back_populates="user", uselist=False)
 
 
 # --- 2. 会话表 (Conversation) ---
@@ -199,3 +200,27 @@ class MessageAttachment(Base):
     created_at = Column(DateTime, default=datetime.now)
 
     message = relationship("Message", back_populates="attachments")
+
+
+class OpenClawConfig(Base):
+    __tablename__ = "openclaw_configs"
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False)
+
+    gateway_url = Column(String, nullable=False)
+    gateway_token = Column(String, nullable=True)
+    gateway_password = Column(String, nullable=True)
+    session_key = Column(String, nullable=False)
+
+    use_ssh = Column(Boolean, default=False)
+    ssh_host = Column(String, nullable=True)
+    ssh_port = Column(Integer, default=22)
+    ssh_user = Column(String, nullable=True)
+    ssh_password = Column(String, nullable=True)
+    ssh_local_port = Column(Integer, default=0)
+
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=datetime.now)
+
+    user = relationship("User", back_populates="openclaw_config")
