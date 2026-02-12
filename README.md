@@ -8,7 +8,7 @@
 
 ## 功能特性
 
-- 登录/注册 + JWT 鉴权
+- 登录/注册 + JWT 鉴权 (已删除)
 - 流式聊天（StreamingResponse）与多会话历史管理
 - 聊天树（Conversation Tree）：树状分叉、节点回溯、分支切换
 - 文档上传建库（PDF/TXT/MD）与 RAG 检索增强
