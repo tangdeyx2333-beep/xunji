@@ -14,6 +14,20 @@ export function connectOpenClaw(data) {
   })
 }
 
+
+/**
+ * 获取 OpenClaw 历史记录
+ * @param {string} user_id 用户ID
+ * @returns {Promise<Array<{role: string, content: Array<{type: string, text: string}>, timestamp: number}>>}
+ */
+export function getOpenClawHistory(user_id) {
+  return request({
+    url: '/api/openclaw/history',
+    method: 'get',
+    params: { user_id }
+  })
+}
+
 /**
  * OpenClaw 独立流式对话
  * @param {Object} data 请求数据 { message: string, user_id: string }

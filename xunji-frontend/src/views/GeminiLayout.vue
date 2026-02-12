@@ -10,8 +10,7 @@ import {
   Share, CopyDocument, Position, Loading, SwitchButton, Close, UploadFilled, Service // 引入新图标
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { useRouter } from 'vue-router'
-import { openClawChatStream, connectOpenClaw } from '@/api/openclaw'
+import { openClawChatStream, connectOpenClaw, getOpenClawHistory } from '@/api/openclaw'
 
 // --- API --- API ---
 import { getFiles, uploadFile, deleteFile, clearKnowledgeBase } from '@/api/file'
@@ -19,11 +18,11 @@ import { getFiles, uploadFile, deleteFile, clearKnowledgeBase } from '@/api/file
 import { chatStream, getConversations, getConversationMessages, deleteConversation, getNodePath, getModels, createModel, deleteModel, getAttachmentSignedUrl, getInstructions, createInstruction, updateInstruction, deleteInstruction, getConversationInstructions, createConversationInstruction, updateConversationInstruction, deleteConversationInstruction } from '@/api/chat'
 import renderMarkdown from '@/utils/markdown'
 import { useUserStore } from '@/stores/userStore'
+import { login, upgradeAccount } from '@/api/auth'
 
 // --- 1. 基础配置 ---
 const APP_NAME = ref("xunji")
 const userStore = useUserStore()
-const router = useRouter() // 获取 router 实例
 const chatContainerRef = ref(null)
 
 // --- 2. 界面状态 ---
@@ -56,7 +55,11 @@ const settingsActiveTab = ref('models')
 const availableModels = ref([
   // 默认模型 (可以被后端数据覆盖或合并)
   { model_name: 'deepseek-chat', display_name: 'DeepSeek Chat' },
-  { model_name: 'kimi-k2.5', display_name: 'Kimi-k2.5' },
+  { model_name: 'deepseek-chat-thinking', display_name: 'DeepSeek Chat Thinking' },
+  { model_name: 'kimi-k2.5', display_name: 'Kimi-k2.5 多模态' },
+  { model_name: 'kimi-k2-thinking', display_name: 'Kimi-k2 Thinking' },
+  { model_name: 'qwen3-max', display_name: 'Qwen3 Max' },
+
 ])
 const newModelForm = reactive({ model_name: '', display_name: '' })
 
@@ -64,6 +67,10 @@ const aiInstructionInput = ref('')
 const aiInstructions = ref([])
 const isInstructionsLoading = ref(false)
 const isInstructionSubmitting = ref(false)
+const isAccountUpgrading = ref(false)
+const isAccountRecovering = ref(false)
+const accountUpgradeForm = reactive({ username: '', password: '' })
+const accountRecoveryForm = reactive({ username: '', password: '' })
 
 // --- OpenClaw 配置 ---
 const openClawForm = reactive({
@@ -171,9 +178,10 @@ const isSendingView = computed(() => {
 })
 
 const enterOpenClawMode = async () => {
-  if (isOpenClawMode.value) return
-  lastNormalConversationId.value = currentConversationId.value
-  isOpenClawMode.value = true
+  if (!isOpenClawMode.value) {
+    lastNormalConversationId.value = currentConversationId.value
+    isOpenClawMode.value = true
+  }
 
   openClawState.messages = []
   openClawState.isSending = false
@@ -181,13 +189,41 @@ const enterOpenClawMode = async () => {
   currentAttachments.value = []
   selectedFileIds.value = []
 
-  openClawState.messages.push({
-    role: 'ai',
-    content: '你好，我是 OpenClaw。有什么可以帮您？',
-    html: renderMarkdown('你好，我是 OpenClaw。有什么可以帮您？'),
-    loading: false,
-    done: true,
-  })
+  // 加载历史记录
+  try {
+    const history = await getOpenClawHistory(userStore.userInfo?.id)
+    console.log('OpenClaw History Data:', history) // 打印原始数据，方便排查格式问题
+    const formattedHistory = history.map((item, index) => {
+      try {
+        return {
+          role: item.role,
+          content: item.content[0]?.text || '',
+          html: renderMarkdown(item.content[0]?.text || ''),
+          loading: false,
+          done: true,
+          timestamp: item.timestamp
+        }
+      } catch (e) {
+        console.error(`格式化第 ${index} 条历史记录失败:`, item, e)
+        throw e
+      }
+    })
+    openClawState.messages.push(...formattedHistory)
+  } catch (error) {
+    ElMessage.error('加载 OpenClaw 历史记录失败，请检查控制台')
+    console.error('OpenClaw 历史记录加载错误详情:', error)
+  }
+
+  // 添加欢迎消息（如果历史记录为空）
+  if (openClawState.messages.length === 0) {
+    openClawState.messages.push({
+      role: 'ai',
+      content: '你好，我是 OpenClaw。有什么可以帮您？',
+      html: renderMarkdown('你好，我是 OpenClaw。有什么可以帮您？'),
+      loading: false,
+      done: true,
+    })
+  }
 
   scrollToBottom()
 }
@@ -274,7 +310,7 @@ const handleConnectOpenClaw = async () => {
     return
   }
   if (openClawForm.use_ssh) {
-    if (!openClawForm.ssh_host || !openClawForm.ssh_user || !openClawForm.ssh_password) {
+    if (!openClawForm.ssh_host || !openClawForm.ssh_user) {
       ElMessage.warning('请填写完整的 SSH 信息')
       return
     }
@@ -349,7 +385,9 @@ const fetchModelList = async () => {
     // 实际生产中可能希望完全由后端控制
     const defaultModels = [
       { model_name: 'deepseek-chat', display_name: 'DeepSeek Chat' },
-      { model_name: 'kimi-k2.5', display_name: 'Kimi-k2.5' },
+      { model_name: 'kimi-k2.5', display_name: 'Kimi-k2.5 多模态' },
+      { model_name: 'kimi-k2-thinking', display_name: 'Kimi-k2 Thinking' },
+      { model_name: 'qwen3-max', display_name: 'Qwen3 Max' },
     ]
     
     // 过滤掉已经在 customModels 里的默认模型 (按 model_name)
@@ -661,9 +699,62 @@ const removeSession = async (e, id) => {
   }
 }
 
+const handleUpgradeAccount = async () => {
+  if (!accountUpgradeForm.username) {
+    ElMessage.warning('请填写用户名')
+    return
+  }
+  try {
+    isAccountUpgrading.value = true
+    const res = await upgradeAccount({
+      username: accountUpgradeForm.username,
+      password: accountUpgradeForm.password || null
+    })
+    userStore.token = res.access_token
+    userStore.userInfo = { id: res.user_id, username: res.username }
+    localStorage.setItem('access_token', res.access_token)
+    localStorage.setItem('user_info', JSON.stringify(userStore.userInfo))
+    if (res.device_id) {
+      localStorage.setItem('device_id', res.device_id)
+    }
+    ElMessage.success('账号已升级')
+  } catch (error) {
+    const message = error?.response?.data?.detail || '升级失败'
+    ElMessage.error(message)
+  } finally {
+    isAccountUpgrading.value = false
+  }
+}
+
+const handleRecoverAccount = async () => {
+  if (!accountRecoveryForm.username) {
+    ElMessage.warning('请填写用户名')
+    return
+  }
+  try {
+    isAccountRecovering.value = true
+    const res = await login({
+      username: accountRecoveryForm.username,
+      password: accountRecoveryForm.password || ''
+    })
+    userStore.token = res.access_token
+    userStore.userInfo = { id: res.user_id, username: res.username }
+    localStorage.setItem('access_token', res.access_token)
+    localStorage.setItem('user_info', JSON.stringify(userStore.userInfo))
+    if (res.device_id) {
+      localStorage.setItem('device_id', res.device_id)
+    }
+    ElMessage.success('恢复成功')
+  } catch (error) {
+    const message = error?.response?.data?.detail || '恢复失败'
+    ElMessage.error(message)
+  } finally {
+    isAccountRecovering.value = false
+  }
+}
+
 const handleLogout = () => {
-  userStore.logout() // 清除 Pinia 状态和 Token
-  router.push('/login') // 跳转到登录页
+  userStore.logout()
   ElMessage.success('已退出登录')
 }
 
@@ -1498,8 +1589,11 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
             <div class="menu-item" :class="{ active: settingsActiveTab === 'instructions' }" @click="settingsActiveTab = 'instructions'">
               AI 指令
             </div>
-            <div class="menu-item" :class="{ active: settingsActiveTab === 'openclaw' }" @click="settingsActiveTab = 'openclaw'">
+          <div class="menu-item" :class="{ active: settingsActiveTab === 'openclaw' }" @click="settingsActiveTab = 'openclaw'">
               OpenClaw
+            </div>
+            <div class="menu-item" :class="{ active: settingsActiveTab === 'account' }" @click="settingsActiveTab = 'account'">
+              账号
             </div>
           </div>
         </div>
@@ -1574,6 +1668,41 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
                 </template>
               </el-table-column>
             </el-table>
+          </div>
+
+          <div v-if="settingsActiveTab === 'account'" class="settings-panel">
+            <h3>账号管理</h3>
+            <el-form label-position="top" label-width="100px" style="max-width: 460px;">
+              <el-form-item label="当前账号">
+                <el-input :model-value="userStore.userInfo?.username || '匿名用户'" disabled />
+              </el-form-item>
+            </el-form>
+
+            <h3 style="margin-top: 20px">升级账号</h3>
+            <el-form label-position="top" label-width="100px" style="max-width: 460px;">
+              <el-form-item label="用户名">
+                <el-input v-model="accountUpgradeForm.username" placeholder="输入用户名" />
+              </el-form-item>
+              <el-form-item label="密码（可选）">
+                <el-input v-model="accountUpgradeForm.password" placeholder="设置密码（可选）" type="password" show-password />
+              </el-form-item>
+              <el-button type="primary" :loading="isAccountUpgrading" @click="handleUpgradeAccount" style="width: 100%">
+                升级账号
+              </el-button>
+            </el-form>
+
+            <h3 style="margin-top: 20px">恢复已有账号</h3>
+            <el-form label-position="top" label-width="100px" style="max-width: 460px;">
+              <el-form-item label="用户名">
+                <el-input v-model="accountRecoveryForm.username" placeholder="输入用户名" />
+              </el-form-item>
+              <el-form-item label="密码">
+                <el-input v-model="accountRecoveryForm.password" placeholder="输入密码" type="password" show-password />
+              </el-form-item>
+              <el-button type="primary" :loading="isAccountRecovering" @click="handleRecoverAccount" style="width: 100%">
+                恢复账号
+              </el-button>
+            </el-form>
           </div>
 
           <!-- OpenClaw -->

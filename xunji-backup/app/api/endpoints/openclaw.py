@@ -117,6 +117,61 @@ def _create_adapter_settings(config: OpenClawConnectRequest, override_url: Optio
     )
 
 
+@router.get("/history")
+async def get_openclaw_history(user_id: str, db: Session = Depends(get_db)):
+    """
+    获取用户的 OpenClaw 历史聊天记录。
+
+    该接口会根据 user_id 从数据库恢复 OpenClaw 连接，
+    并从数据库中读取该用户的 session_key，用于获取对应的历史记录。
+
+    Args:
+        user_id (str): 用户唯一标识。
+        db (Session): 数据库会话。
+
+    Returns:
+        List[Dict]: 符合前端格式要求的历史消息列表。
+    """
+    # 1. 从数据库获取用户配置以取得 session_key
+    config = db.query(OpenClawConfig).filter(OpenClawConfig.user_id == user_id).first()
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="未找到 OpenClaw 配置，请先进行连接配置。"
+        )
+    
+    session_key = config.session_key
+
+    # 2. 获取或恢复适配器连接
+    adapter = await _get_adapter_for_user(user_id, db)
+    if not adapter:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="无法建立 OpenClaw 连接，请检查配置信息。"
+        )
+
+    try:
+        # 3. 使用数据库中的 session_key 调用适配器获取历史记录
+        # 适配器内部会根据 session_key 定位到具体的对话会话
+        history = adapter.get_chat_history_simple(session_key)
+        
+        # history 的格式应为：
+        # [
+        #   {
+        #     "role": "user",
+        #     "content": [{"type": "text", "text": "..."}],
+        #     "timestamp": ...
+        #   },
+        #   ...
+        # ]
+        return history
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取 OpenClaw 历史记录失败: {str(e)}"
+        )
+
+
 # --- 接口实现 ---
 
 @router.post("/connect")

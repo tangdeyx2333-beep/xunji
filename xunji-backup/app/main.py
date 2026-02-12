@@ -31,7 +31,7 @@ app.add_middleware(
     allow_origins=["*"],
     allow_credentials=True, # 允许携带 Cookie/Token
     allow_methods=["*"],    # 允许所有方法 (GET, POST, PUT, DELETE...)
-    allow_headers=["*"],    # 允许所有 Header (Authorization, Content-Type...)
+    allow_headers=["Content-Type", "Authorization", "X-Device-ID"],    # 显式允许自定义的 X-Device-ID 头
 )
 
 

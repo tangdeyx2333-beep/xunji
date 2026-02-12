@@ -1,10 +1,10 @@
 import request from '@/utils/request'
 import { ElMessage } from 'element-plus'
 
-// 保留原有的非流式方法（可选，或者删除）
-export function chatWithModel(data) {
-  return request({ url: '/api/chat', method: 'post', data })
-}
+// // 保留原有的非流式方法（可选，或者删除）
+// export function chatWithModel(data) {
+//   return request({ url: '/api/chat', method: 'post', data })
+// }
 
 export function getConversations(params) {
   return request({ url: '/api/conversations', method: 'get', params })

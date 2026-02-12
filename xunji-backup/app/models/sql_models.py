@@ -21,8 +21,15 @@ class User(Base):
     username = Column(String, unique=True, index=True, nullable=True)
     email = Column(String, nullable=True)
 
-    #  新增：必须存储加密后的密码
-    hashed_password = Column(String(100), nullable=False)
+    # 设备指纹，用于匿名用户识别
+    device_id = Column(String, unique=True, index=True, nullable=True)
+    
+    #  新增：存储加密后的密码（可为空，支持无密码的匿名用户）
+    hashed_password = Column(String(100), nullable=True)
+    
+    # 是否为匿名用户（自动创建的用户）
+    is_anonymous = Column(Boolean, default=True)
+    
     # 对应草图: delete (是否注销 0未 1是) -> 建议用 Boolean
     is_deleted = Column(Boolean, default=False)
 

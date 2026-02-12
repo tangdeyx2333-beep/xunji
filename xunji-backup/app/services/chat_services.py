@@ -40,7 +40,7 @@ class ChatService:
 
     def __init__(self) -> None:
         """Initialize the chat service."""
-        self.search_model = ChatGoogleGenerativeAI(model=os.getenv("GOOGLE_SEARCH_MODEL"))
+        self.search_model = ChatGoogleGenerativeAI(model=os.getenv("GOOGLE_SEARCH_MODEL", "deepseek-chat"))
 
     def get_model(self, model_name: str) -> Any:
         """Get a LangChain chat model instance.
@@ -437,7 +437,7 @@ class ChatService:
             [
                 (
                     "system",
-                    """你是一个名为'知微'的AI助手。
+                    """你是一个名为'循迹'的AI助手。
 {extra_instructions}
 """,
                 ),

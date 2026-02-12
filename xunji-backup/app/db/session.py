@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 from app.models.sql_models import Base
@@ -40,8 +40,14 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 def init_db():
     Base.metadata.create_all(bind=engine)
     inspector = inspect(engine)
-    print(f"当前数据库中的表有: {inspector.get_table_names()}")
-    print("数据库表结构已创建成功！")
+    if "users" in inspector.get_table_names():
+        columns = {column["name"] for column in inspector.get_columns("users")}
+        with engine.begin() as connection:
+            if "device_id" not in columns:
+                connection.execute(text("ALTER TABLE users ADD COLUMN device_id VARCHAR"))
+                connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_device_id ON users (device_id)"))
+            if "is_anonymous" not in columns:
+                connection.execute(text("ALTER TABLE users ADD COLUMN is_anonymous BOOLEAN DEFAULT 1"))
 
 # 依赖注入用的函数 (给 FastAPI Depends 用)
 def get_db():

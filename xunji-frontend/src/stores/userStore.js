@@ -15,16 +15,15 @@ export const useUserStore = defineStore('user', () => {
   const login = async (loginForm) => {
     try {
       const res = await loginApi(loginForm)
-      // res 结构: { access_token: "...", token_type: "bearer", user_id: "...", username: "..." }
-      
-      // 保存 Token 到状态和本地存储
       token.value = res.access_token
       userInfo.value = { id: res.user_id, username: res.username }
-      
       localStorage.setItem('access_token', res.access_token)
       localStorage.setItem('user_info', JSON.stringify(userInfo.value))
+      if (res.device_id) {
+        localStorage.setItem('device_id', res.device_id)
+      }
       
-      return { success: true } // 登录成功
+      return { success: true }
     } catch (error) {
       const status = error?.response?.status
       const detail = error?.response?.data?.detail
