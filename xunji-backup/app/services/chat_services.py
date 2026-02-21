@@ -13,7 +13,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 from sqlalchemy.orm import Session
 
-from app.models.sql_models import AiInstruction, FileRecord, Message, TreeNode
+from app.models.sql_models import AiInstruction, ConversationAiInstruction, FileRecord, Message, TreeNode
 from app.schemas.chat import ChatRequest, SearchQuery
 from app.services.model_manager import model_manager
 from app.services.rag_service import rag_service
@@ -40,7 +40,7 @@ class ChatService:
 
     def __init__(self) -> None:
         """Initialize the chat service."""
-        self.search_model = ChatGoogleGenerativeAI(model=os.getenv("GOOGLE_SEARCH_MODEL"))
+        self.search_model = ChatGoogleGenerativeAI(model=os.getenv("GOOGLE_SEARCH_MODEL", "deepseek-chat"))
 
     def get_model(self, model_name: str) -> Any:
         """Get a LangChain chat model instance.
@@ -185,7 +185,7 @@ class ChatService:
         now_str = datetime.now().replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
         return f"{user_text}\n\n当前时间：{now_str}"
 
-    def _get_user_instructions(self, db: Session, user_id: str) -> str:
+    def _get_user_instructions(self, db: Optional[Session], user_id: str) -> str:
         """Get user's AI instructions from database.
         
         Args:
@@ -195,6 +195,9 @@ class ChatService:
         Returns:
             Formatted instructions string or empty string if no instructions.
         """
+        if db is None:
+            return ""
+
         instructions = (
             db.query(AiInstruction)
             .filter(AiInstruction.user_id == user_id)
@@ -208,6 +211,28 @@ class ChatService:
         
         instruction_texts = [f"{i+1}. {inst.content}" for i, inst in enumerate(instructions)]
         return "额外指令：\n" + "\n".join(instruction_texts)
+
+    def _get_conversation_instructions(self, db: Optional[Session], user_id: str, conversation_id: Optional[str]) -> str:
+        if db is None or not conversation_id:
+            return ""
+
+        instructions = (
+            db.query(ConversationAiInstruction)
+            .filter(ConversationAiInstruction.user_id == user_id)
+            .filter(ConversationAiInstruction.conversation_id == conversation_id)
+            .filter(ConversationAiInstruction.is_deleted == False)
+            .order_by(ConversationAiInstruction.sort_order.asc(), ConversationAiInstruction.created_at.asc())
+            .all()
+        )
+
+        instruction_texts = [f"{i+1}. {inst.content}" for i, inst in enumerate(instructions)]
+        return "会话指令：\n" + "\n".join(instruction_texts)
+
+    def _get_combined_instructions(self, db: Optional[Session], user_id: str, conversation_id: Optional[str]) -> str:
+        user_instructions = self._get_user_instructions(db, user_id)
+        conversation_instructions = self._get_conversation_instructions(db, user_id, conversation_id)
+        blocks = [b for b in [user_instructions, conversation_instructions] if b]
+        return "\n\n".join(blocks)
 
     def _build_kimi_multimodal_parts(self, files: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Build Kimi multimodal parts list for HumanMessage(content=list).
@@ -386,7 +411,7 @@ class ChatService:
                 yield f"❌ 当前模型 ({request.model_name}) 不支持图片/视频理解，请切换到 Kimi。"
                 return
 
-            extra_instructions = self._get_user_instructions(db, request.user_id)
+            extra_instructions = self._get_combined_instructions(db, request.user_id, request.conversation_id)
             sys_msg_content = (
                 "你是一个名为'知微'的AI助手。\n"
                 "请结合以下参考信息回答用户的问题。\n\n"
@@ -407,12 +432,12 @@ class ChatService:
                 yield getattr(chunk, "content", str(chunk))
             return
 
-        extra_instructions = self._get_user_instructions(db, request.user_id)
+        extra_instructions = self._get_combined_instructions(db, request.user_id, request.conversation_id)
         qa_prompt = ChatPromptTemplate.from_messages(
             [
                 (
                     "system",
-                    """你是一个名为'知微'的AI助手。
+                    """你是一个名为'循迹'的AI助手。
 {extra_instructions}
 """,
                 ),

@@ -1,3 +1,35 @@
+# OpenClaw 模块测试报告
+
+## 1. 测试范围
+- 后端 `OpenClaw` 聊天接口功能及流式响应格式。
+- 前端组件交互（人工验证）。
+
+## 2. 测试用例清单
+
+| ID | 用例描述 | 输入 | 预期输出 | 结果 |
+|---|---|---|---|---|
+| TC001 | 正常聊天请求 | `{"message": "Hello"}` | HTTP 200, Content-Type: text/event-stream, 包含 `data: {"content":` | 通过 |
+| TC002 | 流结束标记 | 同上 | 包含 `data: [DONE]` | 通过 |
+
+### 2.1 前端沉浸式模式人工用例
+
+| ID | 用例描述 | 操作步骤 | 预期输出 | 结果 |
+|---|---|---|---|---|
+| TC101 | 进入 OpenClaw 模式清空主视图 | 点击顶部 OpenClaw 按钮 | 主聊天区切换到 OpenClaw 专用消息列表；不创建新会话、不写入侧边栏历史 | 通过 |
+| TC102 | 主输入框路由到 OpenClaw | 在 OpenClaw 模式输入并发送 | 用户消息上屏；AI 回复以流式方式追加；普通模型发送逻辑不触发 | 通过 |
+| TC103 | 退出恢复普通会话 | 点击“退出”按钮 | 恢复 `isOpenClawMode=false`；重新加载进入前会话视图 | 通过 |
+
+## 3. 自检通过声明
+- [x] 单元测试 `tests/test_openclaw.py` 已编写并通过。
+- [x] 代码逻辑无死循环，流式响应正确关闭。
+- [x] 修复了 `main.py` 中的已知启动错误。
+- [x] 前端构建通过：`npm run build`（Vite）。
+
+测试工具: `pytest`
+测试结果: 1 passed
+
+---
+
 # AI 指令功能测试报告
 
 ## 测试范围
@@ -15,6 +47,7 @@
 - **数据库**：SQLite（内存模式）
 - **Python版本**：3.12.7
 - **测试文件**：`tests/test_instructions.py`
+- **回归测试**：执行全量 pytest（包含 `tests/test_sqlalchemy_sqlite_url.py`），用于验证 SQLite 数据库路径归一化与父目录自动创建不会影响现有功能。
 
 ## 测试用例清单
 

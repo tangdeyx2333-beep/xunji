@@ -1,29 +1,37 @@
+import os
+import sys
+import time
+
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.endpoints import chat, upload, retrieval, history, auth, models, attachments, instructions
+
+from app.api.endpoints import chat, upload, retrieval, history, auth, models, attachments, instructions, openclaw
 from app.db.session import init_db
 
-
+load_dotenv()
 
 # 初始化数据库
 init_db()
 # 1. 创建应用
-app = FastAPI(title="知微 (ZhiWei) RAG API")
+app = FastAPI(title="循迹 (xunji) RAG API")
 
 # 2. 配置跨域 (CORS) - 这一步对前后端分离非常重要！
 # 允许 Vue (通常是 localhost:5173 或 8080) 访问
 origins = [
-    "http://localhost:5173",  # Vue 默认端口
-    "http://localhost:8080",
-    "http://127.0.0.1:5173"
+    # "http://localhost:5173",  # Vue 默认端口
+    # "http://localhost:8080",
+    # "http://127.0.0.1:5173",
+    # "http://0.0.0.0:*",
+    "*"
 ]
 app.add_middleware(
     CORSMiddleware,
     # 允许的来源：允许前端地址，开发环境可以直接用 ["*"] 允许所有
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=["*"],
     allow_credentials=True, # 允许携带 Cookie/Token
     allow_methods=["*"],    # 允许所有方法 (GET, POST, PUT, DELETE...)
-    allow_headers=["*"],    # 允许所有 Header (Authorization, Content-Type...)
+    allow_headers=["Content-Type", "Authorization", "X-Device-ID"],    # 显式允许自定义的 X-Device-ID 头
 )
 
 
@@ -37,6 +45,7 @@ app.include_router(attachments.router, prefix="/api", tags=["Attachments"]) # �
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"]) # ★ 注册
 app.include_router(models.router, prefix="/api", tags=["Models"]) # ★ 模型管理
 app.include_router(instructions.router, prefix="/api", tags=["Instructions"]) # ★ AI 指令
+app.include_router(openclaw.router, prefix="/api/openclaw", tags=["OpenClaw"]) # ★ OpenClaw 独立接口
 # 4. 根路径测试
 @app.get("/")
 def root():
@@ -44,6 +53,8 @@ def root():
 
 # 5. 启动代码 (仅在直接运行此文件时执行)
 if __name__ == "__main__":
+    port = int(os.getenv("PORT", 21801))
     import uvicorn
     # 对应 Java 的 SpringApplication.run()
-    uvicorn.run(app, host="127.0.0.1", port=8080)
+    uvicorn.run(app, host="127.0.0.1", port=port)
+

@@ -4,6 +4,8 @@
 
 平台内置“模型管理/切换”能力，可在 OpenAI 兼容接口（如 DeepSeek、Kimi/Moonshot、通义千问 DashScope）与本地 Ollama、Gemini 等模型之间切换；同时支持按需启用联网搜索（Tavily）提升回答的时效性与可溯源性。
 
+内部嵌入了自己的openclaw服务
+
 ## 功能特性
 
 - 登录/注册 + JWT 鉴权
@@ -23,9 +25,34 @@
 ## 仓库结构
 
 ```text
+### 📂 项目结构总览 (Project Structure)
+
+```text
 xunji/
-  xunji-backup/        # 后端（FastAPI）
-  xunji-frontend/      # 前端（Vue3 + Vite）
+├── xunji-backup/               # 🐍 后端服务 (FastAPI)
+│   └── app/                    # 核心应用包
+│       ├── api/                # 🌐 接口层 (Interface Layer)
+│       │   └── endpoints/      # 具体路由定义 (如 auth.py, chat.py)
+│       ├── core/               # ⚙️ 核心配置 (Config & Security)
+│       ├── db/                 # 💾 数据库管理 (Database Session)
+│       ├── models/             # 🗄️ SQL Models (ORM 模型)
+│       ├── schemas/            # 📝 Pydantic Schemas (数据校验)
+│       ├── services/           # 🧠 业务逻辑层 (Service Layer)
+│       │   ├── chat_services.py
+│       │   ├── rag_service.py
+│       │   └── ...
+│       └── main.py             # 🚀 后端启动入口
+│
+└── xunji-frontend/             # 🎨 前端项目 (Vue 3 + Vite)
+    └── src/
+        ├── api/                # 📡 API 接口封装 (Axios Requests)
+        ├── router/             # 🛣️ 路由配置 (Vue Router)
+        ├── stores/             # 📦 状态管理 (Pinia)
+        ├── utils/              # 🛠️ 通用工具 (Request, Markdown)
+        ├── views/              # 🖼️ 页面组件 (Pages)
+        ├── App.vue             # 🧱 根组件
+        └── main.js             # 🚀 前端启动入口
+```
 ```
 
 ## 快速开始
@@ -108,10 +135,6 @@ LLM（按需配置其一或多种）：
 - 会话/路径查询接口：[history.py](file:///f:/aaa_desktop_file/xunji/xunji-backup/app/api/endpoints/history.py)
 - 前端树渲染与交互：[GeminiLayout.vue](file:///f:/aaa_desktop_file/xunji/xunji-frontend/src/views/GeminiLayout.vue)
 
-## 安全提示
-
-- 不要把 `.env`、日志、向量库持久化目录提交到仓库
-- 生产环境建议通过反向代理（HTTPS）与更严格的 CORS 配置对外提供服务
 
 ## 贡献
 

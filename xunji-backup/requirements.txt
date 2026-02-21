@@ -15,4 +15,13 @@ python-dotenv
 langchain-ollama
 sqlalchemy
 cos-python-sdk-v5
-oss2
+alibabacloud_oss_v2
+cos-python-sdk-v5
+openclaw_webchat_adapter
+paramiko>=3.0.0
+sshtunnel>=0.4.0
+dotenv
+python-jose[cryptography]==3.4.0
+passlib
+python-multipart
+bcrypt==4.0.1

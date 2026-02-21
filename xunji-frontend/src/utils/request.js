@@ -1,6 +1,7 @@
 // src/utils/request.js
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
+import { getOrCreateDeviceId } from './deviceFingerprint'
 
 // const apiBaseUrl = import.meta.env.VITE_API_BASE_URL
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL
@@ -18,10 +19,10 @@ const service = axios.create({
 // 2. 请求拦截器 (自动带 Token)
 service.interceptors.request.use(
   (config) => {
-    // 从 localStorage 获取 token
     const token = localStorage.getItem('access_token')
+    const deviceId = getOrCreateDeviceId()
+    config.headers['X-Device-ID'] = deviceId
     if (token) {
-      // 按照 OAuth2 标准，Header 格式为 "Bearer <token>"
       config.headers['Authorization'] = `Bearer ${token}`
     }
     return config
@@ -34,24 +35,23 @@ service.interceptors.request.use(
 // 3. 响应拦截器 (统一处理错误)
 service.interceptors.response.use(
   (response) => {
-    // 如果后端直接返回数据，这里直接返回 response.data
     return response.data
   },
   (error) => {
-    // 处理 HTTP 错误状态码
     if (error.response) {
       const status = error.response.status
       const msg = error.response.data.detail || '请求失败'
+      const requestUrl = error.config?.url || ''
+      const isLoginRequest = requestUrl.includes('/api/auth/login')
+
+      if (isLoginRequest) {
+        return Promise.reject(error)
+      }
 
       if (status === 401) {
-        // Token 过期或未登录
         ElMessage.error('登录已过期，请重新登录')
-        localStorage.removeItem('access_token') // 清除失效 Token
+        localStorage.removeItem('access_token')
         localStorage.removeItem('user_info')
-        // 强制刷新页面或跳转到登录页 (简单粗暴但有效)
-        setTimeout(() => {
-           window.location.href = '/login'
-        }, 1000)
       } else {
         ElMessage.error(msg)
       }

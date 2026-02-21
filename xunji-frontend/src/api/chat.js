@@ -1,10 +1,10 @@
 import request from '@/utils/request'
 import { ElMessage } from 'element-plus'
 
-// 保留原有的非流式方法（可选，或者删除）
-export function chatWithModel(data) {
-  return request({ url: '/api/chat', method: 'post', data })
-}
+// // 保留原有的非流式方法（可选，或者删除）
+// export function chatWithModel(data) {
+//   return request({ url: '/api/chat', method: 'post', data })
+// }
 
 export function getConversations(params) {
   return request({ url: '/api/conversations', method: 'get', params })
@@ -55,6 +55,22 @@ export function updateInstruction(instructionId, data) {
 
 export function deleteInstruction(instructionId) {
   return request({ url: `/api/instructions/${instructionId}`, method: 'delete' })
+}
+
+export function getConversationInstructions(conversationId) {
+  return request({ url: `/api/conversations/${conversationId}/instructions`, method: 'get' })
+}
+
+export function createConversationInstruction(conversationId, data) {
+  return request({ url: `/api/conversations/${conversationId}/instructions`, method: 'post', data })
+}
+
+export function updateConversationInstruction(conversationId, instructionId, data) {
+  return request({ url: `/api/conversations/${conversationId}/instructions/${instructionId}`, method: 'put', data })
+}
+
+export function deleteConversationInstruction(conversationId, instructionId) {
+  return request({ url: `/api/conversations/${conversationId}/instructions/${instructionId}`, method: 'delete' })
 }
 
 /**

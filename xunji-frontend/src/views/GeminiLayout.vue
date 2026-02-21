@@ -7,22 +7,24 @@ import {
   Compass, DataLine, Trophy, Collection,
   Connection,
   Document, Paperclip, ArrowDown, Delete,
-  Share, CopyDocument, Position, Loading, SwitchButton, Close, UploadFilled // 引入新图标
+  Share, CopyDocument, Position, Loading, SwitchButton, Close, UploadFilled, Service // 引入新图标
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { useRouter } from 'vue-router'
+import { openClawChatStream, connectOpenClaw, getOpenClawHistory, getOpenClawConfigs, createAndConnectOpenClaw } from '@/api/openclaw'
 
 // --- API --- API ---
 import { getFiles, uploadFile, deleteFile, clearKnowledgeBase } from '@/api/file'
 // ★ 引入 chatStream8
-import { chatStream, getConversations, getConversationMessages, deleteConversation, getNodePath, getModels, createModel, deleteModel, getAttachmentSignedUrl, getInstructions, createInstruction, updateInstruction, deleteInstruction } from '@/api/chat'
+import { chatStream, getConversations, getConversationMessages, deleteConversation, getNodePath, getModels, createModel, deleteModel, getAttachmentSignedUrl, getInstructions, createInstruction, updateInstruction, deleteInstruction, getConversationInstructions, createConversationInstruction, updateConversationInstruction, deleteConversationInstruction } from '@/api/chat'
 import renderMarkdown from '@/utils/markdown'
 import { useUserStore } from '@/stores/userStore'
+import { login, upgradeAccount } from '@/api/auth'
+
+import OpenClawSettings from './OpenClawSettings.vue'
 
 // --- 1. 基础配置 ---
 const APP_NAME = ref("xunji")
 const userStore = useUserStore()
-const router = useRouter() // 获取 router 实例
 const chatContainerRef = ref(null)
 
 // --- 2. 界面状态 ---
@@ -47,6 +49,7 @@ const inputMessage = ref('')
 const currentModel = ref('deepseek-chat')
 const enableSearch = ref(false)
 const showChatTree = ref(false) // 控制树状图弹窗显示
+const showConversationInstructions = ref(false)
 
 // --- 3. 会话管理 ---
 const showSettings = ref(false)
@@ -54,7 +57,11 @@ const settingsActiveTab = ref('models')
 const availableModels = ref([
   // 默认模型 (可以被后端数据覆盖或合并)
   { model_name: 'deepseek-chat', display_name: 'DeepSeek Chat' },
-  { model_name: 'kimi-k2.5', display_name: 'Kimi-k2.5' },
+  { model_name: 'deepseek-chat-thinking', display_name: 'DeepSeek Chat Thinking' },
+  { model_name: 'kimi-k2.5', display_name: 'Kimi-k2.5 多模态' },
+  { model_name: 'kimi-k2-thinking', display_name: 'Kimi-k2 Thinking' },
+  { model_name: 'qwen3-max', display_name: 'Qwen3 Max' },
+
 ])
 const newModelForm = reactive({ model_name: '', display_name: '' })
 
@@ -62,6 +69,17 @@ const aiInstructionInput = ref('')
 const aiInstructions = ref([])
 const isInstructionsLoading = ref(false)
 const isInstructionSubmitting = ref(false)
+const isAccountUpgrading = ref(false)
+const isAccountRecovering = ref(false)
+const accountUpgradeForm = reactive({ username: '', password: '' })
+const accountRecoveryForm = reactive({ username: '', password: '' })
+
+const isOpenClawConnecting = ref(false)
+
+const conversationInstructionInput = ref('')
+const conversationInstructions = ref([])
+const isConversationInstructionsLoading = ref(false)
+const isConversationInstructionSubmitting = ref(false)
 
 // --- 3. 会话管理 ---
 const currentConversationId = ref(null)
@@ -70,8 +88,12 @@ const currentConversationId = ref(null)
 
 // 计算属性：当前是否正在发送
 const isSending = computed(() => {
-  if (!currentConversationId.value) return false // 新会话（未创建ID前）暂时不支持并发锁（或者需要另外处理）
-  return sessionCache[currentConversationId.value]?.isSending || false
+  const parentKey = (currentLeafId.value || 'root')
+  if (!currentConversationId.value) {
+    return !!tempNewSessionState.sendingByParent?.[parentKey]
+  }
+  const state = sessionCache[currentConversationId.value]
+  return !!state?.sendingByParent?.[parentKey]
 })
 
 // 计算属性：当前是否在聊天中（用于显示欢迎页）
@@ -100,12 +122,14 @@ const currentLeafId = computed({
   }
 })
 
-// 临时变量：用于“新会话”（尚未生成 ID 时）的临时消息存储
+// 临时变量：用于"新会话"（尚未生成 ID 时）的临时消息存储
 // 当用户点击 New Chat 时，currentConversationId = null
 // 我们需要一个临时的 storage，等到第一条消息发送成功获得 session_id 后，再迁移到 sessionCache
 const tempNewSessionState = reactive({
   messages: [],
-  currentLeafId: null
+  currentLeafId: null,
+  isSending: false,
+  sendingByParent: {}
 })
 
 // 修改 chatHistory 的计算逻辑以支持新会话
@@ -118,6 +142,239 @@ const displayMessages = computed(() => {
 
 const historyList = ref([])
 
+const isOpenClawMode = ref(false)
+const openClawConfigs = ref([]) // OpenClaw配置列表
+const currentOpenClawConfig = ref(null) // 当前选中的配置
+const selectedConfigId = ref(null) // 选中的配置ID
+const showOpenClawConfigDialog = ref(false) // 显示配置选择对话框
+const openClawState = reactive({
+  messages: [],
+  isSending: false,
+})
+const lastNormalConversationId = ref(null)
+
+const viewTitle = computed(() => {
+  if (isOpenClawMode.value) {
+    return currentOpenClawConfig.value?.display_name || 'OpenClaw'
+  }
+  return currentModel.value
+})
+
+const viewMessages = computed(() => {
+  return isOpenClawMode.value ? openClawState.messages : displayMessages.value
+})
+
+const isChattingView = computed(() => {
+  return viewMessages.value.length > 0
+})
+
+const isSendingView = computed(() => {
+  return isOpenClawMode.value ? openClawState.isSending : isSending.value
+})
+
+// --- OpenClaw 多配置支持 ---
+const fetchOpenClawConfigs = async () => {
+  try {
+    const configs = await getOpenClawConfigs(userStore.userInfo?.id)
+    openClawConfigs.value = configs || []
+  } catch (error) {
+    console.error('获取OpenClaw配置失败:', error)
+    ElMessage.error('获取OpenClaw配置失败')
+  }
+}
+
+const selectOpenClawConfig = async (config) => {
+  try {
+    currentOpenClawConfig.value = config
+    await connectOpenClawByConfig(config.id)
+    ElMessage.success(`已切换到配置: ${config.display_name}`)
+    
+    // 重新进入OpenClaw模式以加载新配置的历史记录
+    if (isOpenClawMode.value) {
+      await enterOpenClawMode()
+    }
+  } catch (error) {
+    console.error('切换OpenClaw配置失败:', error)
+    ElMessage.error('切换配置失败: ' + (error.message || '未知错误'))
+  }
+}
+
+const handleSelectOpenClawConfig = async () => {
+  if (!selectedConfigId.value) {
+    ElMessage.warning('请选择一个配置')
+    return
+  }
+  
+  const config = openClawConfigs.value.find(c => c.id === selectedConfigId.value)
+  if (!config) {
+    ElMessage.error('配置不存在')
+    return
+  }
+  
+  showOpenClawConfigDialog.value = false
+  await selectOpenClawConfig(config)
+}
+
+const connectOpenClawByConfig = async (configId) => {
+  try {
+    isOpenClawConnecting.value = true
+    await connectOpenClaw(configId)
+    // 连接成功后加载历史记录
+    await loadOpenClawHistory(configId)
+  } catch (error) {
+    console.error('连接OpenClaw失败:', error)
+    ElMessage.error('连接OpenClaw失败: ' + error.message)
+    throw error
+  } finally {
+    isOpenClawConnecting.value = false
+  }
+}
+
+const loadOpenClawHistory = async (configId) => {
+  try {
+    const history = await getOpenClawHistory(configId)
+    console.log('OpenClaw History Data:', history)
+    const formattedHistory = history.map((item, index) => {
+      try {
+        return {
+          role: item.role,
+          content: item.content[0]?.text || '',
+          html: renderMarkdown(item.content[0]?.text || ''),
+          loading: false,
+          done: true,
+          timestamp: item.timestamp
+        }
+      } catch (e) {
+        console.error(`格式化第 ${index} 条历史记录失败:`, item, e)
+        throw e
+      }
+    })
+    openClawState.messages = formattedHistory
+  } catch (error) {
+    console.error('加载OpenClaw历史记录失败:', error)
+    ElMessage.error('加载历史记录失败')
+    throw error
+  }
+}
+
+const enterOpenClawMode = async () => {
+  if (!isOpenClawMode.value) {
+    lastNormalConversationId.value = currentConversationId.value
+    isOpenClawMode.value = true
+  }
+
+  // 如果没有配置，先获取配置列表
+  if (openClawConfigs.value.length === 0) {
+    await fetchOpenClawConfigs()
+  }
+
+  // 如果没有选中配置且只有一个配置，自动选中
+  if (!currentOpenClawConfig.value && openClawConfigs.value.length === 1) {
+    currentOpenClawConfig.value = openClawConfigs.value[0]
+  }
+
+  // 如果仍然没有选中配置，显示配置选择对话框
+  if (!currentOpenClawConfig.value) {
+    showOpenClawConfigDialog.value = true
+    return
+  }
+
+  openClawState.messages = []
+  openClawState.isSending = false
+  inputMessage.value = ''
+  currentAttachments.value = []
+  selectedFileIds.value = []
+
+  // 加载历史记录
+  try {
+    await loadOpenClawHistory(currentOpenClawConfig.value.id)
+  } catch (error) {
+    ElMessage.error('加载 OpenClaw 历史记录失败，请检查控制台')
+    console.error('OpenClaw 历史记录加载错误详情:', error)
+  }
+
+  // 添加欢迎消息（如果历史记录为空）
+  if (openClawState.messages.length === 0) {
+    openClawState.messages.push({
+      role: 'ai',
+      content: `你好，我是 ${currentOpenClawConfig.value.display_name}。有什么可以帮您？`,
+      html: renderMarkdown(`你好，我是 ${currentOpenClawConfig.value.display_name}。有什么可以帮您？`),
+      loading: false,
+      done: true,
+    })
+  }
+
+  scrollToBottom()
+}
+
+const exitOpenClawMode = async () => {
+  if (!isOpenClawMode.value) return
+  isOpenClawMode.value = false
+
+  inputMessage.value = ''
+  currentAttachments.value = []
+
+  if (lastNormalConversationId.value) {
+    await switchSession({ id: lastNormalConversationId.value })
+  } else {
+    startNewChat()
+  }
+}
+
+const sendMessageToOpenClaw = async () => {
+  const text = inputMessage.value.trim()
+  if (!text || openClawState.isSending) return
+
+  openClawState.messages.push({ role: 'user', content: text, loading: false, done: true })
+  inputMessage.value = ''
+  currentAttachments.value = []
+
+  scrollToBottom()
+
+  const aiMessage = reactive({
+    role: 'ai',
+    content: '',
+    html: '',
+    loading: true,
+    done: false,
+  })
+  openClawState.messages.push(aiMessage)
+  scrollToBottom()
+
+  openClawState.isSending = true
+
+  await openClawChatStream(
+    { message: text, config_id: currentOpenClawConfig.value.id },
+    (chunk) => {
+      aiMessage.loading = false
+      aiMessage.content += chunk
+      aiMessage.html = renderMarkdown(aiMessage.content)
+      scrollToBottom()
+    },
+    () => {
+      aiMessage.loading = false
+      aiMessage.done = true
+      openClawState.isSending = false
+      scrollToBottom()
+    },
+    (err) => {
+      aiMessage.loading = false
+      aiMessage.done = true
+      aiMessage.content += `\n[错误: ${err.message}]`
+      aiMessage.html = renderMarkdown(aiMessage.content)
+      openClawState.isSending = false
+      scrollToBottom()
+      
+      // 如果是未配置错误，自动跳转设置
+      if (err.message.includes('未配置') || err.message.includes('前往设置')) {
+         showSettings.value = true
+         settingsActiveTab.value = 'openclaw'
+      }
+    }
+  )
+}
+
+// --- OpenClaw 连接逻辑 ---
 // --- 4. RAG 文件逻辑 ---
 const selectedFileIds = ref([])
 const userFiles = ref([])
@@ -130,6 +387,7 @@ onMounted(async () => {
   await fetchFileList()
   await fetchSessionList()
   await fetchModelList()
+  await fetchOpenClawConfigs()
 })
 
 const currentSessionMessages = ref([]) // 当前会话的原始消息列表
@@ -139,6 +397,23 @@ const currentSessionMessages = ref([]) // 当前会话的原始消息列表
 watch(showSettings, async (isOpen) => {
   if (!isOpen) return
   await fetchInstructions()
+})
+
+watch(showConversationInstructions, async (isOpen) => {
+  if (!isOpen) return
+  await fetchConversationInstructions()
+})
+
+watch(currentConversationId, async () => {
+  if (!showConversationInstructions.value) return
+  await fetchConversationInstructions()
+})
+
+// 监听输入框内容变化，保持滚动位置
+watch(inputMessage, () => {
+  nextTick(() => {
+    scrollToBottom()
+  })
 })
 
 const fetchModelList = async () => {
@@ -152,7 +427,9 @@ const fetchModelList = async () => {
     // 实际生产中可能希望完全由后端控制
     const defaultModels = [
       { model_name: 'deepseek-chat', display_name: 'DeepSeek Chat' },
-      { model_name: 'kimi-k2.5', display_name: 'Kimi-k2.5' },
+      { model_name: 'kimi-k2.5', display_name: 'Kimi-k2.5 多模态' },
+      { model_name: 'kimi-k2-thinking', display_name: 'Kimi-k2 Thinking' },
+      { model_name: 'qwen3-max', display_name: 'Qwen3 Max' },
     ]
     
     // 过滤掉已经在 customModels 里的默认模型 (按 model_name)
@@ -235,6 +512,87 @@ const moveInstructionDown = async (row) => {
   }
 }
 
+const fetchConversationInstructions = async () => {
+  if (!currentConversationId.value) {
+    conversationInstructions.value = []
+    return
+  }
+  try {
+    isConversationInstructionsLoading.value = true
+    const res = await getConversationInstructions(currentConversationId.value)
+    conversationInstructions.value = Array.isArray(res) ? res : []
+  } catch (error) {
+    console.error('加载会话指令失败:', error)
+    ElMessage.error('加载会话指令失败')
+  } finally {
+    isConversationInstructionsLoading.value = false
+  }
+}
+
+const handleAddConversationInstruction = async () => {
+  if (!currentConversationId.value) {
+    ElMessage.warning('请先开始一次对话生成会话')
+    return
+  }
+  const content = (conversationInstructionInput.value || '').trim()
+  if (!content) {
+    ElMessage.warning('请输入指令内容')
+    return
+  }
+  try {
+    isConversationInstructionSubmitting.value = true
+    await createConversationInstruction(currentConversationId.value, { content })
+    conversationInstructionInput.value = ''
+    ElMessage.success('添加成功')
+    await fetchConversationInstructions()
+  } catch (error) {
+    ElMessage.error(error?.message || '添加失败')
+  } finally {
+    isConversationInstructionSubmitting.value = false
+  }
+}
+
+const handleDeleteConversationInstruction = async (row) => {
+  if (!currentConversationId.value) return
+  try {
+    await deleteConversationInstruction(currentConversationId.value, row.id)
+    ElMessage.success('删除成功')
+    await fetchConversationInstructions()
+  } catch (error) {
+    ElMessage.error(error?.message || '删除失败')
+  }
+}
+
+const moveConversationInstructionUp = async (row) => {
+  if (!currentConversationId.value) return
+  const idx = conversationInstructions.value.findIndex((r) => r.id === row.id)
+  if (idx <= 0) return
+  const prev = conversationInstructions.value[idx - 1]
+  const curr = conversationInstructions.value[idx]
+  try {
+    await updateConversationInstruction(currentConversationId.value, curr.id, { sort_order: prev.sort_order })
+    await updateConversationInstruction(currentConversationId.value, prev.id, { sort_order: curr.sort_order })
+    await fetchConversationInstructions()
+  } catch (error) {
+    ElMessage.error(error?.message || '排序调整失败')
+  }
+}
+
+const moveConversationInstructionDown = async (row) => {
+  if (!currentConversationId.value) return
+  const idx = conversationInstructions.value.findIndex((r) => r.id === row.id)
+  if (idx < 0 || idx >= conversationInstructions.value.length - 1) return
+  const next = conversationInstructions.value[idx + 1]
+  const curr = conversationInstructions.value[idx]
+  try {
+    await updateConversationInstruction(currentConversationId.value, curr.id, { sort_order: next.sort_order })
+    await updateConversationInstruction(currentConversationId.value, next.id, { sort_order: curr.sort_order })
+    await fetchConversationInstructions()
+  } catch (error) {
+    ElMessage.error(error?.message || '排序调整失败')
+  }
+}
+
 const handleAddModel = async () => {
   if (!newModelForm.model_name || !newModelForm.display_name) {
     ElMessage.warning('请填写完整信息')
@@ -279,6 +637,13 @@ const fetchSessionList = async () => {
 }
 
 const switchSession = async (session) => {
+  if (isOpenClawMode.value) {
+    isOpenClawMode.value = false
+  }
+  // 确保设置界面和弹窗关闭
+  showSettings.value = false
+  showConversationInstructions.value = false
+  showChatTree.value = false
   if (currentConversationId.value === session.id) return
 
   // 1. 记录当前会话的滚动位置 (如果存在)
@@ -306,6 +671,7 @@ const switchSession = async (session) => {
   sessionCache[session.id] = {
     messages: [],
     isSending: false,
+    sendingByParent: {},
     currentLeafId: null,
     scrollTop: 0
   }
@@ -343,10 +709,19 @@ const switchSession = async (session) => {
 }
 
 const startNewChat = () => {
+  if (isOpenClawMode.value) {
+    isOpenClawMode.value = false
+  }
+  // 开始新会话前确保设置界面和弹窗关闭
+  showSettings.value = false
+  showConversationInstructions.value = false
+  showChatTree.value = false
   currentConversationId.value = null
   // 重置临时状态
   tempNewSessionState.messages = []
   tempNewSessionState.currentLeafId = null
+  tempNewSessionState.isSending = false
+  tempNewSessionState.sendingByParent = {}
   
   inputMessage.value = ''
   selectedFileIds.value = []
@@ -366,9 +741,62 @@ const removeSession = async (e, id) => {
   }
 }
 
+const handleUpgradeAccount = async () => {
+  if (!accountUpgradeForm.username) {
+    ElMessage.warning('请填写用户名')
+    return
+  }
+  try {
+    isAccountUpgrading.value = true
+    const res = await upgradeAccount({
+      username: accountUpgradeForm.username,
+      password: accountUpgradeForm.password || null
+    })
+    userStore.token = res.access_token
+    userStore.userInfo = { id: res.user_id, username: res.username }
+    localStorage.setItem('access_token', res.access_token)
+    localStorage.setItem('user_info', JSON.stringify(userStore.userInfo))
+    if (res.device_id) {
+      localStorage.setItem('device_id', res.device_id)
+    }
+    ElMessage.success('账号已升级')
+  } catch (error) {
+    const message = error?.response?.data?.detail || '升级失败'
+    ElMessage.error(message)
+  } finally {
+    isAccountUpgrading.value = false
+  }
+}
+
+const handleRecoverAccount = async () => {
+  if (!accountRecoveryForm.username) {
+    ElMessage.warning('请填写用户名')
+    return
+  }
+  try {
+    isAccountRecovering.value = true
+    const res = await login({
+      username: accountRecoveryForm.username,
+      password: accountRecoveryForm.password || ''
+    })
+    userStore.token = res.access_token
+    userStore.userInfo = { id: res.user_id, username: res.username }
+    localStorage.setItem('access_token', res.access_token)
+    localStorage.setItem('user_info', JSON.stringify(userStore.userInfo))
+    if (res.device_id) {
+      localStorage.setItem('device_id', res.device_id)
+    }
+    ElMessage.success('恢复成功')
+  } catch (error) {
+    const message = error?.response?.data?.detail || '恢复失败'
+    ElMessage.error(message)
+  } finally {
+    isAccountRecovering.value = false
+  }
+}
+
 const handleLogout = () => {
-  userStore.logout() // 清除 Pinia 状态和 Token
-  router.push('/login') // 跳转到登录页
+  userStore.logout()
   ElMessage.success('已退出登录')
 }
 
@@ -382,12 +810,16 @@ const openChatTree = async () => {
     currentSessionMessages.value = messages
     
     // 转换数据为 ECharts 树形结构
-    const treeData = buildEChartsTree(messages)
+    const highlightNodeId = sessionCache[currentConversationId.value]?.currentLeafId || (messages.length ? messages[messages.length - 1].node_id : null)
+    if (currentConversationId.value && sessionCache[currentConversationId.value] && !sessionCache[currentConversationId.value].currentLeafId && highlightNodeId) {
+      sessionCache[currentConversationId.value].currentLeafId = highlightNodeId
+    }
+    const treeData = buildEChartsTree(messages, highlightNodeId)
     showChatTree.value = true
     
     // 等待 DOM 渲染后初始化 ECharts
     nextTick(() => {
-       initEChartsTree(treeData)
+       initEChartsTree(treeData, highlightNodeId)
     })
     
   } catch (error) {
@@ -397,14 +829,15 @@ const openChatTree = async () => {
 }
 
 // 构建 ECharts 需要的树结构
-function buildEChartsTree(items) {
+function buildEChartsTree(items, highlightId) {
   const nodeMap = {}
   const rootNodes = []
 
   // 1. 初始化 Map
   items.forEach(item => {
-    // 截断过长文本
-    const label = item.content.length > 15 ? item.content.substring(0, 15) + '...' : item.content
+    const raw = (item.content || '').replace(/\s+/g, ' ').trim()
+    const label = raw.length > 18 ? raw.substring(0, 18) + '...' : raw
+    const isHL = highlightId && item.node_id === highlightId
     nodeMap[item.node_id] = { 
       name: `${item.role === 'user' ? '用户' : 'AI'}\n${label}`,
       id: item.node_id, // 存储真实ID用于点击
@@ -413,20 +846,20 @@ function buildEChartsTree(items) {
       original: item,
       // 样式配置
       itemStyle: {
-        color: '#fff',
-        borderColor: '#000',
-        borderWidth: 1.5,
+        color: isHL ? '#fffbe6' : '#fff',
+        borderColor: isHL ? '#f56c6c' : '#000',
+        borderWidth: isHL ? 3 : 1.5,
       },
       label: {
         color: '#000',
         fontSize: 12,
         align: 'center',
         verticalAlign: 'middle',
-        backgroundColor: 'transparent'
+        backgroundColor: isHL ? '#fde047' : 'transparent'
       },
       // 矩形节点
       symbol: 'rect',
-      symbolSize: [120, 40]
+      symbolSize: isHL ? [140, 50] : [120, 40]
     }
   })
 
@@ -451,8 +884,42 @@ function buildEChartsTree(items) {
   }
 }
 
+const computeTreeLayoutStats = (root) => {
+  const levelCounts = []
+  let maxDepth = 0
+
+  const walk = (node, depth) => {
+    if (!node) return
+    if (!levelCounts[depth]) levelCounts[depth] = 0
+    levelCounts[depth] += 1
+    maxDepth = Math.max(maxDepth, depth)
+    for (const child of node.children || []) {
+      walk(child, depth + 1)
+    }
+  }
+
+  walk(root, 0)
+  const maxBreadth = levelCounts.length ? Math.max(...levelCounts) : 1
+  return { maxDepth, maxBreadth }
+}
+
+// 查找高亮节点及其深度
+const findNodeAndDepth = (node, targetId, currentDepth = 0) => {
+  if (!node) return null
+  if (node.id === targetId) {
+    return { node, depth: currentDepth }
+  }
+  if (node.children) {
+    for (const child of node.children) {
+      const result = findNodeAndDepth(child, targetId, currentDepth + 1)
+      if (result) return result
+    }
+  }
+  return null
+}
+
 // 初始化 ECharts
-const initEChartsTree = (data) => {
+const initEChartsTree = (data, highlightNodeId) => {
   const chartDom = document.getElementById('echarts-tree-container')
   if (!chartDom) return
   
@@ -462,6 +929,17 @@ const initEChartsTree = (data) => {
   
   myChart = echarts.init(chartDom)
   
+  const { maxDepth, maxBreadth } = computeTreeLayoutStats(data)
+  const minNodeGap = 56
+  const minLayerPadding = 160
+  const estimatedWidth = Math.max(chartDom.clientWidth || 800, maxBreadth * (140 + minNodeGap) + 320)
+  const estimatedHeight = Math.max(chartDom.clientHeight || 600, (maxDepth + 1) * minLayerPadding + 240)
+
+  // 默认位置：初始时隐藏，计算位置后再显示
+  let seriesTop = 0
+  let seriesLeft = 0
+  let initialOpacity = highlightNodeId ? 0 : 1 // 如果需要高亮定位，先隐藏避免跳变
+
   const option = {
     tooltip: {
       trigger: 'item',
@@ -486,22 +964,31 @@ const initEChartsTree = (data) => {
       {
         type: 'tree',
         data: [data],
-        top: '5%',
-        left: '15%', // 留出左边距
-        bottom: '5%',
-        right: '20%',
+        top: seriesTop,
+        left: seriesLeft,
+        right: null,
+        bottom: null,
+        width: estimatedWidth,
+        height: estimatedHeight,
         symbolSize: 7,
         orient: 'TB', // 从上到下 (Top-Bottom)
+        layout: 'orthogonal',
+        nodeGap: minNodeGap,
+        layerPadding: minLayerPadding,
+        roam: true,
+        scaleLimit: { min: 0.2, max: 2.5 },
         
         // 连接线样式
         itemStyle: {
           borderWidth: 1.5,
           borderColor: '#000',
+          opacity: initialOpacity
         },
         lineStyle: {
           color: '#000',
           width: 1.5,
-          curveness: 0 // 直线 (类似手绘风格)
+          curveness: 0, // 直线 (类似手绘风格)
+          opacity: initialOpacity
         },
         
         label: {
@@ -510,6 +997,7 @@ const initEChartsTree = (data) => {
           align: 'center',
           fontSize: 12,
           lineHeight: 14,
+          opacity: initialOpacity,
           formatter: function(params) {
               return params.name
           }
@@ -519,12 +1007,13 @@ const initEChartsTree = (data) => {
           label: {
             position: 'inside',
             verticalAlign: 'middle',
-            align: 'center'
+            align: 'center',
+            opacity: initialOpacity
           }
         },
         
         expandAndCollapse: true,
-        animationDuration: 550,
+        animationDuration: 0, // 初始渲染无动画，避免位置计算前的跳动
         animationDurationUpdate: 750,
         initialTreeDepth: -1 // 展开所有
       }
@@ -532,6 +1021,97 @@ const initEChartsTree = (data) => {
   }
 
   myChart.setOption(option)
+  
+  // 动态计算居中偏移
+   if (highlightNodeId) {
+      const adjustPosition = () => {
+         // 防止重复触发
+         myChart.off('finished', adjustPosition)
+         
+         const seriesModel = myChart.getModel().getSeriesByIndex(0)
+         const tree = seriesModel.getData().tree
+         let targetNode = null
+         
+         // 深度优先遍历树查找节点
+         const traverse = (node) => {
+             if (!node) return
+             // 检查节点数据中的 id
+             const model = node.getModel()
+             const rawData = model ? model.option : null
+             if (rawData && rawData.id === highlightNodeId) {
+                 targetNode = node
+                 return
+             }
+             
+             if (node.children && node.children.length) {
+                 for (const child of node.children) {
+                     traverse(child)
+                     if (targetNode) return
+                 }
+             }
+         }
+         
+         if (tree && tree.root) {
+             traverse(tree.root)
+         }
+         
+         if (targetNode) {
+            // 获取节点相对于容器左上角的坐标 {x, y}
+            const layout = targetNode.getLayout()
+            
+            if (layout) {
+                const containerWidth = chartDom.clientWidth
+                const containerHeight = chartDom.clientHeight
+                
+                // 计算需要的偏移量
+                const newLeft = containerWidth / 2 - layout.x
+                const newTop = containerHeight / 2 - layout.y
+                
+                // 更新图表位置并显示
+                myChart.setOption({
+                    series: [{
+                        left: newLeft,
+                        top: newTop,
+                        animationDuration: 550, // 恢复动画
+                        itemStyle: { opacity: 1 },
+                        lineStyle: { opacity: 1 },
+                        label: { opacity: 1 },
+                        leaves: { label: { opacity: 1 } }
+                    }]
+                })
+            }
+         } else {
+             // 没找到节点，直接显示
+             myChart.setOption({
+                series: [{
+                    animationDuration: 550,
+                    itemStyle: { opacity: 1 },
+                    lineStyle: { opacity: 1 },
+                    label: { opacity: 1 },
+                    leaves: { label: { opacity: 1 } }
+                }]
+             })
+         }
+      }
+      
+      myChart.on('finished', adjustPosition)
+      
+      // 兜底：如果 300ms 后还没触发 finished，强制显示
+      // 避免因为某种原因事件未触发导致树图一直不可见
+      setTimeout(() => {
+          const currentOpt = myChart.getOption()
+          // 简单检查一下 opacity，或者直接覆盖
+          // 这里不做复杂判断，直接触发显示，反正 setOption 是合并模式
+          myChart.setOption({
+            series: [{
+                itemStyle: { opacity: 1 },
+                lineStyle: { opacity: 1 },
+                label: { opacity: 1 },
+                leaves: { label: { opacity: 1 } }
+            }]
+          })
+      }, 300)
+   }
   
   // 点击事件
   myChart.on('click', function (params) {
@@ -665,12 +1245,57 @@ const handleCopy = async (text) => {
   }
 }
 
+const handleMarkdownClick = async (e) => {
+  const btn = e?.target?.closest?.('.copy-code-btn')
+  if (!btn) return
+  const container = btn.closest('.code-block')
+  const codeEl = container?.querySelector?.('pre code')
+  const text = (codeEl?.textContent || '').trimEnd()
+  if (!text) return
+  await handleCopy(text)
+  const prev = btn.textContent
+  btn.textContent = '已复制'
+  window.setTimeout(() => {
+    btn.textContent = prev
+  }, 1200)
+}
+
+const getParentKey = (parentId) => parentId || 'root'
+
+const beginSending = (sessionState, parentKey) => {
+  if (!sessionState.sendingByParent) sessionState.sendingByParent = {}
+  sessionState.sendingByParent[parentKey] = (sessionState.sendingByParent[parentKey] || 0) + 1
+  sessionState.isSending = true
+}
+
+const endSending = (sessionState, parentKey) => {
+  if (!sessionState?.sendingByParent) {
+    sessionState.isSending = false
+    return
+  }
+  const nextVal = (sessionState.sendingByParent[parentKey] || 0) - 1
+  if (nextVal > 0) sessionState.sendingByParent[parentKey] = nextVal
+  else delete sessionState.sendingByParent[parentKey]
+  sessionState.isSending = Object.keys(sessionState.sendingByParent).length > 0
+}
+
 // ★★★ 发送消息核心逻辑 (改为流式调用) ★★★
 const sendMessage = async () => {
+  // 发送消息前确保设置弹窗关闭
+  showConversationInstructions.value = false
+  
+  if (isOpenClawMode.value) {
+    if (currentAttachments.value.length > 0) {
+      ElMessage.warning('OpenClaw 模式暂不支持附件')
+      currentAttachments.value = []
+    }
+    await sendMessageToOpenClaw()
+    return
+  }
+
   const text = inputMessage.value.trim()
   const attachmentsSnapshot = [...currentAttachments.value]
   if (!text && attachmentsSnapshot.length === 0) return
-  if (isSending.value) return // 防止重复发送
 
   // --- 1. 确定当前操作的会话上下文 ---
   // 如果是新会话，操作 tempNewSessionState
@@ -683,20 +1308,24 @@ const sendMessage = async () => {
   } else {
     // 确保缓存存在 (理论上 switchSession 已经保证了，但做个兜底)
     if (!sessionCache[currentConversationId.value]) {
-       sessionCache[currentConversationId.value] = { messages: [], isSending: false, currentLeafId: null }
+       sessionCache[currentConversationId.value] = { messages: [], isSending: false, sendingByParent: {}, currentLeafId: null }
     }
     activeSessionState = sessionCache[currentConversationId.value]
   }
+
+  const parentKeyAtSend = getParentKey(activeSessionState.currentLeafId)
+  if (isNewSession) {
+    if (activeSessionState.isSending) return
+  } else {
+    if (activeSessionState.sendingByParent?.[parentKeyAtSend]) return
+  }
+
+  beginSending(activeSessionState, parentKeyAtSend)
 
   // --- 2. 用户消息上屏 ---
   activeSessionState.messages.push({ role: 'user', content: text, attachments: attachmentsSnapshot })
   inputMessage.value = ''
   currentAttachments.value = []
-  
-  // 设置发送状态 (注意：对于新会话，这里设置的是临时变量，暂时没用 computed 追踪它，但没关系)
-  if (!isNewSession) {
-     activeSessionState.isSending = true 
-  }
   
   scrollToBottom()
 
@@ -725,6 +1354,16 @@ const sendMessage = async () => {
   
   // 保存发起请求时的 Session ID，用于闭包中判断是否还是当前视图
   const requestSessionId = currentConversationId.value
+
+  let ended = false
+  const endOnce = () => {
+    if (ended) return
+    ended = true
+    const targetState = isNewSession
+      ? (currentConversationId.value ? sessionCache[currentConversationId.value] : tempNewSessionState)
+      : activeSessionState
+    endSending(targetState, parentKeyAtSend)
+  }
 
   await chatStream(
     payload,
@@ -757,15 +1396,7 @@ const sendMessage = async () => {
     () => {
       aiMessage.loading = false
       aiMessage.done = true 
-      
-      // 确保 isSending 被重置
-      if (isNewSession) {
-          if (currentConversationId.value && sessionCache[currentConversationId.value]) {
-              sessionCache[currentConversationId.value].isSending = false
-          }
-      } else {
-         activeSessionState.isSending = false
-      }
+      endOnce()
       
       // 如果是新会话，流结束后刷新列表以显示新标题
       if (isNewSession) {
@@ -776,14 +1407,7 @@ const sendMessage = async () => {
     (err) => {
       aiMessage.loading = false
       aiMessage.done = true
-      
-      if (isNewSession) {
-          if (currentConversationId.value && sessionCache[currentConversationId.value]) {
-              sessionCache[currentConversationId.value].isSending = false
-          }
-      } else {
-         activeSessionState.isSending = false
-      }
+      endOnce()
 
       aiMessage.html += `<br><span style="color:red">[网络错误: ${err.message}]</span>`
     },
@@ -798,10 +1422,16 @@ const sendMessage = async () => {
            // 2. 初始化缓存
            sessionCache[meta.session_id] = {
              messages: [...tempNewSessionState.messages], // 迁移临时消息
-             isSending: true, // 继承发送状态
+             isSending: true,
+             sendingByParent: { [parentKeyAtSend]: 1 },
              currentLeafId: null,
              scrollTop: 0
            }
+
+           tempNewSessionState.messages = []
+           tempNewSessionState.currentLeafId = null
+           tempNewSessionState.isSending = false
+           tempNewSessionState.sendingByParent = {}
            
            // 3. 将 activeSessionState 指向新缓存，确保后续闭包更新正确对象
            // 注意：这一步其实不需要，因为 aiMessage 是 reactive 对象，引用没变。
@@ -831,27 +1461,9 @@ const sendMessage = async () => {
              // 提前结束 Loading 状态，恢复发送按钮
              aiMessage.loading = false
              aiMessage.done = true 
-             if (!isNewSession) {
-                activeSessionState.isSending = false
-             }
-             // 注意：这里如果是新会话，我们可能还想等标题生成后再刷新列表，或者现在就刷新也行
-             // 但为了体验更流畅，我们在这里先不置 isSending = false (针对新会话)，
-             // 或者我们可以允许用户继续操作，标题更新在后台静默完成。
-             
-             // 策略：新会话也立即解锁
-             if (isNewSession) {
-                 // ★ 修复：如果是新会话，此时 activeSessionState 还是 tempNewSessionState
-                 // 但 isSending 计算属性依赖的是 sessionCache[currentConversationId]
-                 // 所以必须显式更新 sessionCache 中的状态
-                 if (currentConversationId.value && sessionCache[currentConversationId.value]) {
-                     sessionCache[currentConversationId.value].isSending = false
-                 }
-                 
-                 // 先刷新一次列表，显示“新对话”
-                 fetchSessionList()
-             } else {
-                 activeSessionState.isSending = false
-             }
+             endOnce()
+
+             if (isNewSession) fetchSessionList()
           }
           if (meta.user_attachments_saved && Array.isArray(meta.user_attachments_saved)) {
              const msgs = targetSessionState.messages || []
@@ -994,17 +1606,32 @@ const formatSize = (bytes) => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
 }
 
+const signedUrlTasks = new Map()
+
+const isPdfAttachment = (att) => {
+  const mime = (att?.mime || '').toLowerCase()
+  const name = (att?.filename || att?.name || '').toLowerCase()
+  return mime === 'application/pdf' || name.endsWith('.pdf')
+}
+
 const ensureSignedUrl = async (att) => {
   if (att.url) return att.url
   if (!att.id) return null
+  const existingTask = signedUrlTasks.get(att.id)
+  if (existingTask) return await existingTask
   try {
-    const res = await getAttachmentSignedUrl(att.id)
-    att.url = res.url
-    att.expires_at = res.expires_at
-    return att.url
+    const task = getAttachmentSignedUrl(att.id).then((res) => {
+      att.url = res.url
+      att.expires_at = res.expires_at
+      return att.url
+    })
+    signedUrlTasks.set(att.id, task)
+    return await task
   } catch (e) {
     ElMessage.error('获取附件链接失败')
     return null
+  } finally {
+    signedUrlTasks.delete(att.id)
   }
 }
 
@@ -1020,6 +1647,28 @@ const getAttachmentSrc = (att) => {
   return ''
 }
 
+watch(viewMessages, async (messages) => {
+  try {
+    const tasks = []
+    for (const msg of messages || []) {
+      for (const att of msg?.attachments || []) {
+        if (!att) continue
+        if (att.url || att.base64) continue
+        if (!att.id) continue
+        const isImage = (att.mime || '').startsWith('image/') || att.type === 'image'
+        const isVideo = (att.mime || '').startsWith('video/') || att.type === 'video'
+        if (!isImage && !isVideo) continue
+        tasks.push(ensureSignedUrl(att))
+      }
+    }
+    if (tasks.length > 0) {
+      await Promise.allSettled(tasks)
+    }
+  } catch (e) {
+    console.error('预拉取附件链接失败:', e)
+  }
+}, { deep: true, immediate: true })
+
 // 辅助方法
 const scrollToBottom = () => {
   nextTick(() => {
@@ -1030,7 +1679,14 @@ const clickCard = (text) => {
   inputMessage.value = text
   sendMessage()
 }
-const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
+const handleOpenClawConfigCommand = (command) => {
+  if (command.type === 'select') {
+    selectOpenClawConfig(command.config)
+  } else if (command.type === 'manage') {
+    showSettings.value = true
+    settingsActiveTab.value = 'openclaw'
+  }
+}
 
 </script>
 
@@ -1091,42 +1747,219 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
     </aside>
 
     <main class="main-area">
-      <header class="top-bar">
-        <!-- 模型切换下拉菜单 -->
-        <el-dropdown trigger="click" @command="(cmd) => currentModel = cmd">
-          <span class="model-name cursor-pointer">
-            {{ currentModel }}
-            <el-icon class="el-icon--right"><ArrowDown /></el-icon>
-          </span>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item v-for="model in availableModels" :key="model.model_name" :command="model.model_name">
-                {{ model.display_name }}
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
-        
-        <!-- 新增：聊天树按钮 -->
-        <el-button v-if="currentConversationId" circle @click="openChatTree" title="查看对话树" style="margin-right: 12px; margin-left: auto;">
-           <el-icon><Share /></el-icon>
-        </el-button>
+      <!-- 设置页面 (嵌入式) -->
+      <div v-if="showSettings" class="settings-embedded-container">
+        <div class="settings-sidebar">
+          <h2 class="settings-title">Settings</h2>
+          <div class="settings-menu">
+            <div class="menu-item" :class="{ active: settingsActiveTab === 'models' }" @click="settingsActiveTab = 'models'">
+              模型管理
+            </div>
+            <div class="menu-item" :class="{ active: settingsActiveTab === 'instructions' }" @click="settingsActiveTab = 'instructions'">
+              AI 指令
+            </div>
+          <div class="menu-item" :class="{ active: settingsActiveTab === 'openclaw' }" @click="settingsActiveTab = 'openclaw'">
+              OpenClaw
+            </div>
+            <div class="menu-item" :class="{ active: settingsActiveTab === 'account' }" @click="settingsActiveTab = 'account'">
+              账号
+            </div>
+          </div>
+        </div>
+        <div class="settings-content">
+          <!-- 模型管理 -->
+          <div v-if="settingsActiveTab === 'models'" class="settings-panel">
+            <h3>添加新模型</h3>
+            <div class="add-model-form">
+              <el-input v-model="newModelForm.model_name" placeholder="模型ID (如 gpt-4)" style="margin-bottom: 10px" />
+              <el-input v-model="newModelForm.display_name" placeholder="显示名称 (如 GPT-4)" style="margin-bottom: 10px" />
+              <el-button type="primary" @click="handleAddModel" style="width: 100%">添加</el-button>
+            </div>
 
-        <!-- 用户头像下拉菜单 -->
-        <el-dropdown trigger="click" @command="(cmd) => cmd === 'logout' && handleLogout()">
-          <el-avatar :size="32" class="user-avatar cursor-pointer" style="margin-left: 12px">U</el-avatar>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item command="logout" style="color: #f56c6c;">
-                <el-icon><SwitchButton /></el-icon> 注销
-              </el-dropdown-item>
-            </el-dropdown-menu>
+            <h3 style="margin-top: 20px">可用模型列表</h3>
+            <el-table :data="availableModels" style="width: 100%" max-height="400">
+              <el-table-column prop="display_name" label="名称" />
+              <el-table-column prop="model_name" label="ID" />
+              <el-table-column label="操作" width="80">
+                <template #default="scope">
+                  <el-button 
+                    v-if="scope.row.is_custom" 
+                    link 
+                    type="danger" 
+                    @click="handleDeleteModel(scope.row)"
+                  >
+                    删除
+                  </el-button>
+                  <span v-else style="color: #999; font-size: 12px">默认</span>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+
+          <!-- AI 指令 -->
+          <div v-if="settingsActiveTab === 'instructions'" class="settings-panel">
+            <h3>添加指令</h3>
+            <el-input
+              v-model="aiInstructionInput"
+              type="textarea"
+              :rows="4"
+              placeholder="例如：请用简洁中文回答；先给结论再解释；代码请给可运行示例"
+              style="margin-bottom: 10px"
+            />
+            <el-button
+              type="primary"
+              :loading="isInstructionSubmitting"
+              @click="handleAddInstruction"
+              style="width: 100%"
+            >
+              添加
+            </el-button>
+
+            <h3 style="margin-top: 20px">指令列表</h3>
+            <el-table :data="aiInstructions" style="width: 100%" max-height="400" v-loading="isInstructionsLoading">
+              <el-table-column prop="content" label="内容" />
+              <el-table-column label="操作" width="170">
+                <template #default="scope">
+                  <el-button link size="small" @click="moveInstructionUp(scope.row)" :disabled="scope.$index === 0">
+                    上移
+                  </el-button>
+                  <el-button
+                    link
+                    size="small"
+                    @click="moveInstructionDown(scope.row)"
+                    :disabled="scope.$index === aiInstructions.length - 1"
+                  >
+                    下移
+                  </el-button>
+                  <el-button link type="danger" size="small" @click="handleDeleteInstruction(scope.row)">
+                    删除
+                  </el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+
+          <!-- OpenClaw 管理 -->
+          <div v-if="settingsActiveTab === 'openclaw'" class="settings-panel">
+            <OpenClawSettings />
+          </div>
+
+          <div v-if="settingsActiveTab === 'account'" class="settings-panel">
+            <h3>账号管理</h3>
+            <el-form label-position="top" label-width="100px" style="max-width: 460px;">
+              <el-form-item label="当前账号">
+                <el-input :model-value="userStore.userInfo?.username || '匿名用户'" disabled />
+              </el-form-item>
+            </el-form>
+
+            <h3 style="margin-top: 20px">升级账号</h3>
+            <el-form label-position="top" label-width="100px" style="max-width: 460px;">
+              <el-form-item label="用户名">
+                <el-input v-model="accountUpgradeForm.username" placeholder="输入用户名" />
+              </el-form-item>
+              <el-form-item label="密码（可选）">
+                <el-input v-model="accountUpgradeForm.password" placeholder="设置密码（可选）" type="password" show-password />
+              </el-form-item>
+              <el-button type="primary" :loading="isAccountUpgrading" @click="handleUpgradeAccount" style="width: 100%">
+                升级账号
+              </el-button>
+            </el-form>
+
+            <h3 style="margin-top: 20px">恢复已有账号</h3>
+            <el-form label-position="top" label-width="100px" style="max-width: 460px;">
+              <el-form-item label="用户名">
+                <el-input v-model="accountRecoveryForm.username" placeholder="输入用户名" />
+              </el-form-item>
+              <el-form-item label="密码">
+                <el-input v-model="accountRecoveryForm.password" placeholder="输入密码" type="password" show-password />
+              </el-form-item>
+              <el-button type="primary" :loading="isAccountRecovering" @click="handleRecoverAccount" style="width: 100%">
+                恢复账号
+              </el-button>
+            </el-form>
+          </div>
+        </div>
+      </div>
+
+      <!-- 聊天主界面 -->
+      <div v-else class="chat-container-wrapper">
+        <header class="top-bar">
+          <template v-if="!isOpenClawMode">
+            <el-dropdown trigger="click" @command="(cmd) => currentModel = cmd">
+              <span class="model-name cursor-pointer">
+                {{ currentModel }}
+                <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </span>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item v-for="model in availableModels" :key="model.model_name" :command="model.model_name">
+                    {{ model.display_name }}
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </template>
-        </el-dropdown>
-      </header>
+
+          <template v-else>
+            <el-dropdown trigger="click" @command="handleOpenClawConfigCommand" class="openclaw-config-dropdown">
+              <span class="model-name cursor-pointer">
+                {{ viewTitle }}
+                <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </span>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item 
+                    v-for="config in openClawConfigs" 
+                    :key="config.id" 
+                    :command="{ type: 'select', config: config }"
+                    :class="{ 'is-active': currentOpenClawConfig?.id === config.id }"
+                  >
+                    <div class="config-dropdown-item">
+                      <div class="config-name">{{ config.display_name }}</div>
+                      <div class="config-url">{{ config.gateway_url }}</div>
+                    </div>
+                  </el-dropdown-item>
+                  <el-dropdown-item divided :command="{ type: 'manage' }">
+                    <el-icon><Setting /></el-icon> 管理配置
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </template>
+        
+          <!-- 新增：聊天树按钮 -->
+          <el-button v-if="currentConversationId && !isOpenClawMode" circle @click="openChatTree" title="查看对话树" style="margin-right: 12px; margin-left: auto;">
+             <el-icon><Share /></el-icon>
+          </el-button>
+
+          <el-button v-if="!isOpenClawMode" circle @click="showConversationInstructions = true" title="会话指令" style="margin-right: 12px;">
+            <el-icon><Setting /></el-icon>
+          </el-button>
+
+          <!-- OpenClaw Button -->
+          <el-button circle @click="enterOpenClawMode" title="OpenClaw" style="margin-right: 12px;">
+             <el-icon><Service /></el-icon>
+          </el-button>
+
+          <el-button v-if="isOpenClawMode" @click="exitOpenClawMode" style="margin-right: 12px;">
+            退出
+          </el-button>
+
+          <!-- 用户头像下拉菜单 -->
+          <el-dropdown trigger="click" @command="(cmd) => cmd === 'logout' && handleLogout()">
+            <el-avatar :size="32" class="user-avatar cursor-pointer" style="margin-left: 12px">U</el-avatar>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="logout" style="color: #f56c6c;">
+                  <el-icon><SwitchButton /></el-icon> 注销
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </header>
 
       <div class="content-scroll-area" ref="chatContainerRef">
-        <div v-if="!isChatting" class="welcome-container">
+        <div v-if="!isChattingView" class="welcome-container">
           <div class="greeting">
             <h1 class="gradient-text">Hello, Developer</h1>
             <h1 class="sub-text">How can I help you today?</h1>
@@ -1134,7 +1967,7 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
         </div>
 
         <div v-else class="chat-list">
-          <div v-for="(msg, index) in chatHistory" :key="index" class="message" :class="msg.role">
+          <div v-for="(msg, index) in viewMessages" :key="index" class="message" :class="msg.role">
             <div class="avatar-col">
               <!-- 用户头像: 紫色背景 + 白色字母 -->
               <div v-if="msg.role === 'user'" class="avatar-circle user-theme">U</div>
@@ -1145,7 +1978,7 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
               <div v-if="msg.role === 'ai'" class="markdown-body">
                 <div v-if="msg.loading && !msg.html" class="typing-indicator"><span></span><span></span><span></span></div>
                 <div v-else>
-                   <div v-html="msg.html"></div>
+                   <div v-html="msg.html" @click="handleMarkdownClick"></div>
                    <!-- 复制按钮 -->
                    <div v-if="msg.done" class="message-actions">
                      <el-button type="primary" plain size="small" @click="handleCopy(msg.content)">
@@ -1157,11 +1990,28 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
               <div v-else class="user-text">
                 <div v-if="msg.content">{{ msg.content }}</div>
                 <div v-if="msg.attachments && msg.attachments.length > 0" class="message-attachments">
-                  <a v-for="att in msg.attachments" :key="att.id || att.storage_key || att.name" class="att-item" href="#" @click.prevent="openAttachment(att)">
-                    <img v-if="(att.mime || '').startsWith('image/') || att.type === 'image'" class="att-thumb" :src="getAttachmentSrc(att)" />
-                    <video v-else-if="(att.mime || '').startsWith('video/') || att.type === 'video'" class="att-video" :src="getAttachmentSrc(att)" controls />
-                    <span v-else class="att-file">{{ att.filename || att.name }}</span>
-                  </a>
+                  <div v-for="att in msg.attachments" :key="att.id || att.storage_key || att.name" class="att-item" @click="openAttachment(att)">
+                    <img
+                      v-if="(att.mime || '').startsWith('image/') || att.type === 'image'"
+                      class="att-thumb"
+                      :src="getAttachmentSrc(att)"
+                    />
+                    <video
+                      v-else-if="(att.mime || '').startsWith('video/') || att.type === 'video'"
+                      class="att-thumb"
+                      :src="getAttachmentSrc(att)"
+                      muted
+                      playsinline
+                      preload="metadata"
+                    />
+                    <div v-else class="att-icon">
+                      <el-icon><Document /></el-icon>
+                    </div>
+                    <div class="att-meta">
+                      <div class="att-name" :title="att.filename || att.name">{{ att.filename || att.name }}</div>
+                      <div class="att-sub">{{ (att.mime || '').toLowerCase() || (isPdfAttachment(att) ? 'application/pdf' : 'file') }}</div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1197,7 +2047,7 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
             v-model="inputMessage" 
             type="textarea" 
             :autosize="{ minRows: 1, maxRows: 8 }"
-            :placeholder="selectedCount > 0 ? `已引用 ${selectedCount} 个文件...` : '问问 xunji (支持粘贴图片/文件)'"
+            :placeholder="isOpenClawMode ? '问问 OpenClaw' : (selectedCount > 0 ? `已引用 ${selectedCount} 个文件...` : '问问 xunji (支持粘贴图片/文件)')"
             class="gemini-input" 
             resize="none" 
             @keydown.enter.exact.prevent="sendMessage"
@@ -1262,14 +2112,20 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
             <!-- 右侧工具: 搜索、发送 -->
             <div class="toolbar-right">
               <el-tooltip effect="dark" :content="enableSearch ? '联网搜索: 开' : '联网搜索: 关'" placement="top">
-                <el-button circle link class="search-btn" :class="{ 'is-active': enableSearch }" @click="enableSearch = !enableSearch">
+                <el-button circle link class="search-btn" :class="{ 'is-active': enableSearch }" :disabled="isOpenClawMode" @click="enableSearch = !enableSearch">
                   <el-icon :size="18"><Connection /></el-icon>
                 </el-button>
               </el-tooltip>
               
-              <el-button circle :type="inputMessage || currentAttachments.length > 0 ? 'primary' : ''" :disabled="(!inputMessage && currentAttachments.length === 0) && !isSending" @click="sendMessage" class="send-btn">
+              <el-button
+                circle
+                :type="inputMessage || currentAttachments.length > 0 ? 'primary' : ''"
+                :disabled="isSendingView || (!inputMessage && currentAttachments.length === 0)"
+                @click="sendMessage"
+                class="send-btn"
+              >
                 <el-icon :size="18">
-                  <Loading v-if="isSending" class="is-loading" />
+                  <Loading v-if="isSendingView" class="is-loading" />
                   <Position v-else />
                 </el-icon>
               </el-button>
@@ -1278,6 +2134,7 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
         </div>
         <div class="disclaimer">{{ APP_NAME }} may display inaccurate info.</div>
       </div>
+    </div>
     </main>
 
     <!-- 聊天树弹窗 -->
@@ -1285,82 +2142,85 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
       <div id="echarts-tree-container" class="tree-container"></div>
     </el-dialog>
 
-    <!-- 设置弹窗 -->
-    <el-dialog v-model="showSettings" title="设置" width="500px">
-      <el-tabs v-model="settingsActiveTab">
-        <el-tab-pane label="模型管理" name="models">
-          <div class="settings-section">
-            <h3>添加新模型</h3>
-            <div class="add-model-form">
-              <el-input v-model="newModelForm.model_name" placeholder="模型ID (如 gpt-4)" style="margin-bottom: 10px" />
-              <el-input v-model="newModelForm.display_name" placeholder="显示名称 (如 GPT-4)" style="margin-bottom: 10px" />
-              <el-button type="primary" @click="handleAddModel" style="width: 100%">添加</el-button>
+    <!-- OpenClaw配置选择对话框 -->
+    <el-dialog v-model="showOpenClawConfigDialog" title="选择OpenClaw配置" width="400px">
+      <div class="openclaw-config-selection">
+        <p style="margin-bottom: 16px; color: #666;">请选择要连接的OpenClaw配置：</p>
+        <el-radio-group v-model="selectedConfigId" class="config-radio-group">
+          <el-radio 
+            v-for="config in openClawConfigs" 
+            :key="config.id" 
+            :label="config.id"
+            class="config-radio"
+          >
+            <div class="config-info">
+              <div class="config-name">{{ config.display_name }}</div>
+              <div class="config-url">{{ config.gateway_url }}</div>
             </div>
+          </el-radio>
+        </el-radio-group>
+        <div v-if="openClawConfigs.length === 0" class="no-configs">
+          <el-empty description="暂无配置" :image-size="60" />
+          <el-button type="primary" @click="showSettings = true; settingsActiveTab = 'openclaw'; showOpenClawConfigDialog = false" style="width: 100%; margin-top: 16px;">
+            创建配置
+          </el-button>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="showOpenClawConfigDialog = false">取消</el-button>
+        <el-button 
+          type="primary" 
+          @click="handleSelectOpenClawConfig"
+          :disabled="!selectedConfigId"
+          :loading="isOpenClawConnecting"
+        >
+          连接
+        </el-button>
+      </template>
+    </el-dialog>
 
-            <h3 style="margin-top: 20px">可用模型列表</h3>
-            <el-table :data="availableModels" style="width: 100%" max-height="300">
-              <el-table-column prop="display_name" label="名称" />
-              <el-table-column prop="model_name" label="ID" />
-              <el-table-column label="操作" width="80">
-                <template #default="scope">
-                  <el-button 
-                    v-if="scope.row.is_custom" 
-                    link 
-                    type="danger" 
-                    @click="handleDeleteModel(scope.row)"
-                  >
-                    删除
-                  </el-button>
-                  <span v-else style="color: #999; font-size: 12px">默认</span>
-                </template>
-              </el-table-column>
-            </el-table>
-          </div>
-        </el-tab-pane>
-        <el-tab-pane label="AI 指令" name="instructions">
-          <div class="settings-section">
-            <h3>添加指令</h3>
-            <el-input
-              v-model="aiInstructionInput"
-              type="textarea"
-              :rows="4"
-              placeholder="例如：请用简洁中文回答；先给结论再解释；代码请给可运行示例"
-              style="margin-bottom: 10px"
-            />
-            <el-button
-              type="primary"
-              :loading="isInstructionSubmitting"
-              @click="handleAddInstruction"
-              style="width: 100%"
-            >
-              添加
-            </el-button>
+    <el-dialog v-model="showConversationInstructions" title="会话指令" width="520px" :modal="false" :close-on-click-modal="false" :destroy-on-close="true">
+      <div class="settings-section">
+        <h3>添加指令</h3>
+        <el-input
+          v-model="conversationInstructionInput"
+          type="textarea"
+          :rows="4"
+          placeholder="仅对当前会话生效；会拼接进 system prompt"
+          style="margin-bottom: 10px"
+        />
+        <el-button
+          type="primary"
+          :loading="isConversationInstructionSubmitting"
+          @click="handleAddConversationInstruction"
+          style="width: 100%"
+        >
+          添加
+        </el-button>
 
-            <h3 style="margin-top: 20px">指令列表</h3>
-            <el-table :data="aiInstructions" style="width: 100%" max-height="300" v-loading="isInstructionsLoading">
-              <el-table-column prop="content" label="内容" />
-              <el-table-column label="操作" width="170">
-                <template #default="scope">
-                  <el-button link size="small" @click="moveInstructionUp(scope.row)" :disabled="scope.$index === 0">
-                    上移
-                  </el-button>
-                  <el-button
-                    link
-                    size="small"
-                    @click="moveInstructionDown(scope.row)"
-                    :disabled="scope.$index === aiInstructions.length - 1"
-                  >
-                    下移
-                  </el-button>
-                  <el-button link type="danger" size="small" @click="handleDeleteInstruction(scope.row)">
-                    删除
-                  </el-button>
-                </template>
-              </el-table-column>
-            </el-table>
-          </div>
-        </el-tab-pane>
-      </el-tabs>
+        <h3 style="margin-top: 20px">指令列表</h3>
+        <el-table :data="conversationInstructions" style="width: 100%" max-height="320" v-loading="isConversationInstructionsLoading">
+          <el-table-column prop="content" label="内容" />
+          <el-table-column label="操作" width="170">
+            <template #default="scope">
+              <el-button link size="small" @click="moveConversationInstructionUp(scope.row)" :disabled="scope.$index === 0">
+                上移
+              </el-button>
+              <el-button
+                link
+                size="small"
+                @click="moveConversationInstructionDown(scope.row)"
+                :disabled="scope.$index === conversationInstructions.length - 1"
+              >
+                下移
+              </el-button>
+              <el-button link type="danger" size="small" @click="handleDeleteConversationInstruction(scope.row)">
+                删除
+              </el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
     </el-dialog>
 
   </div>
@@ -1370,7 +2230,8 @@ const toggleSidebar = () => isSidebarCollapsed.value = !isSidebarCollapsed.value
 /* 树状图样式 */
 .tree-container {
   width: 100%;
-  height: 600px;
+  height: 80vh;
+  min-height: 600px;
   overflow: hidden;
 }
 
@@ -1591,6 +2452,112 @@ $hover-color: #e3e3e3;
   background: $bg-main;
 }
 
+/* 嵌入式设置页样式 */
+.settings-embedded-container {
+  flex: 1;
+  display: flex;
+  background-color: $bg-main;
+  overflow: hidden;
+  height: 100%;
+}
+
+.settings-sidebar {
+  width: 240px;
+  border-right: 1px solid #e0e0e0;
+  padding: 30px 20px;
+  display: flex;
+  flex-direction: column;
+  background-color: #fafafa;
+
+  .settings-title {
+    font-size: 24px;
+    font-weight: 600;
+    margin-bottom: 30px;
+    color: $text-primary;
+  }
+
+  .settings-menu {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+
+    .menu-item {
+      padding: 10px 15px;
+      border-radius: 8px;
+      cursor: pointer;
+      color: $text-secondary;
+      font-size: 15px;
+      transition: all 0.2s;
+
+      &:hover {
+        background-color: #e8e8e8;
+        color: $text-primary;
+      }
+
+      &.active {
+        background-color: #e3e3e3;
+        color: $text-primary;
+        font-weight: 500;
+      }
+    }
+  }
+}
+
+.settings-content {
+  flex: 1;
+  padding: 40px 60px;
+  overflow-y: auto;
+
+  .settings-panel {
+    max-width: 800px;
+    margin: 0 auto;
+
+    h3 {
+      font-size: 20px;
+      margin-bottom: 24px;
+      font-weight: 500;
+      color: $text-primary;
+    }
+
+    .setting-tip {
+      font-size: 12px;
+      color: #909399;
+      line-height: 1.4;
+      margin-top: 4px;
+    }
+
+    .advanced-settings {
+      border: none;
+      margin-top: 10px;
+      
+      :deep(.el-collapse-item__header) {
+        border-bottom: none;
+        height: 32px;
+        color: #409eff;
+        font-size: 13px;
+      }
+      
+      :deep(.el-collapse-item__wrap) {
+        border-bottom: none;
+        background-color: transparent;
+      }
+
+      :deep(.el-collapse-item__content) {
+        padding-bottom: 10px;
+      }
+    }
+  }
+}
+
+/* 聊天主界面容器 */
+.chat-container-wrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
 .top-bar {
   height: 60px;
   padding: 0 20px;
@@ -1727,37 +2694,59 @@ $hover-color: #e3e3e3;
         .att-item {
           display: inline-flex;
           align-items: center;
-          gap: 6px;
-          padding: 6px 8px;
+          gap: 8px;
+          max-width: 320px;
+          padding: 8px 10px;
           border: 1px solid #e0e0e0;
           border-radius: 10px;
           background: #fff;
-          text-decoration: none;
+          cursor: pointer;
           color: inherit;
-          max-width: 260px;
+          overflow: hidden;
         }
 
         .att-thumb {
-          width: 64px;
-          height: 48px;
-          object-fit: cover;
+          width: 72px;
+          height: 54px;
           border-radius: 8px;
           border: 1px solid #eee;
-          background: #fafafa;
+          background: #f6f7f8;
+          object-fit: cover;
           flex-shrink: 0;
         }
 
-        .att-video {
-          width: 200px;
-          max-width: 100%;
-          border-radius: 10px;
+        .att-icon {
+          width: 72px;
+          height: 54px;
+          border-radius: 8px;
           border: 1px solid #eee;
-          background: #000;
+          background: #f6f7f8;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #666;
+          flex-shrink: 0;
         }
 
-        .att-file {
+        .att-meta {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+          min-width: 0;
+        }
+
+        .att-name {
           font-size: 13px;
-          color: #1967d2;
+          font-weight: 600;
+          color: #1f1f1f;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .att-sub {
+          font-size: 12px;
+          color: #666;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
@@ -1786,6 +2775,29 @@ $hover-color: #e3e3e3;
 :deep(.markdown-body) {
   p {
     margin-bottom: 10px;
+  }
+
+  .code-block {
+    position: relative;
+  }
+
+  .copy-code-btn {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    font-size: 12px;
+    line-height: 1;
+    padding: 6px 8px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.35);
+    color: rgba(255, 255, 255, 0.92);
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .copy-code-btn:hover {
+    background: rgba(0, 0, 0, 0.5);
   }
 
   pre {
@@ -2088,6 +3100,59 @@ $hover-color: #e3e3e3;
     color: $text-secondary;
   }
 }
+
+/* OpenClaw配置选择样式 */
+.openclaw-config-selection {
+  .config-radio-group {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+  }
+  
+  .config-radio {
+    display: block;
+    margin-right: 0;
+    padding: 12px;
+    border: 1px solid #e4e7ed;
+    border-radius: 6px;
+    transition: all 0.3s;
+    
+    &:hover {
+      border-color: #409eff;
+      background-color: #f5f7fa;
+    }
+    
+    &.is-checked {
+      border-color: #409eff;
+      background-color: #ecf5ff;
+    }
+    
+    .config-info {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      
+      .config-name {
+        font-weight: 500;
+        color: #303133;
+        font-size: 14px;
+      }
+      
+      .config-url {
+        color: #909399;
+        font-size: 12px;
+        word-break: break-all;
+      }
+    }
+  }
+  
+  .no-configs {
+    text-align: center;
+    padding: 20px 0;
+  }
+}
+
 </style>
 
 <style lang="scss">
@@ -2154,6 +3219,34 @@ $hover-color: #e3e3e3;
         max-width: 180px;
       }
     }
+  }
+}
+
+/* OpenClaw配置下拉菜单样式 */
+.openclaw-config-dropdown {
+  .config-dropdown-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 0;
+    min-width: 200px;
+    
+    .config-name {
+      font-weight: 500;
+      color: #303133;
+      font-size: 14px;
+    }
+    
+    .config-url {
+      color: #909399;
+      font-size: 12px;
+      word-break: break-all;
+    }
+  }
+  
+  .el-dropdown-menu__item.is-active {
+    background-color: #ecf5ff;
+    color: #409eff;
   }
 }
 </style>

@@ -1,3 +1,35 @@
+# OpenClaw 沉浸式聊天模式设计文档
+
+## 修改摘要
+
+本次重构将 OpenClaw 从“弹窗聊天”改为“主界面沉浸式模式”集成：点击 OpenClaw 按钮进入 OpenClaw 模式后，主聊天区立即切换为 OpenClaw 专用消息列表；主输入框发送逻辑改为直连 OpenClaw 流式接口；退出后恢复到进入前的普通会话视图。
+
+## 架构设计思路
+
+### 1. 状态划分
+
+- `isOpenClawMode`：全局/父组件内的布尔状态，控制是否处于 OpenClaw 模式。
+- `openClawState.messages`：OpenClaw 模式的独立消息数组，采用与主聊天一致的消息结构（`role/content/html/loading/done`），确保主消息渲染组件可复用。
+- `lastNormalConversationId`：记录进入 OpenClaw 模式前的会话 ID，用于退出时恢复视图。
+
+### 2. 视图切换策略
+
+- 进入 OpenClaw：只切换视图与发送路由，不触发“新建会话”接口，不向侧边栏写入历史记录。
+- 退出 OpenClaw：将 `isOpenClawMode=false`，并恢复进入前的会话视图（按 `lastNormalConversationId` 加载）。
+
+### 3. 发送路由策略
+
+- `isOpenClawMode=true`：主输入框发送消息走 OpenClaw SSE 流式接口，实时追加到主消息列表（OpenClaw 专用数组）。
+- `isOpenClawMode=false`：保持原有普通模型（DeepSeek/Kimi）流式发送逻辑不变。
+
+### 4. UI 适配
+
+- 顶部标题：在 OpenClaw 模式显示固定标题 `OpenClaw`，隐藏普通模型下拉切换与会话指令入口。
+- 退出入口：提供显式“退出”按钮恢复普通会话。
+- 兼容渲染：OpenClaw 消息使用与主聊天相同渲染结构（AI 消息支持 Markdown 渲染）。
+
+---
+
 # AI 指令功能设计文档
 
 ## 修改摘要
@@ -158,6 +190,8 @@ def _get_user_instructions(self, db: Session, user_id: str) -> str:
 ### 必需配置
 
 本功能不依赖额外的环境变量，使用现有的数据库配置即可。
+
+另外需要注意：当 `SQLALCHEMY_DATABASE_URL` 使用 SQLite 文件路径（例如 `sqlite:///../database/xunji.db`）时，SQLite 只能创建“文件”，不能自动创建“父目录”。后端已在启动阶段对 SQLite URL 做了路径归一化，并在需要时自动创建数据库文件所在的父目录，以避免因目录不存在导致启动失败。
 
 ### 可选配置
 

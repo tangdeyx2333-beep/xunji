@@ -5,7 +5,7 @@ from typing import Optional, List, Dict, Any
 class ChatRequest(BaseModel):
     user_id: Optional[str] = None       # 用户id
     message: str                        # 用户发送的消息
-    model_name: str = "gpt-3.5-turbo"   # 模型名称，默认值
+    model_name: str = "deepseek-chat"   # 模型名称，默认值
     enable_search: bool = False         # 是否开启联网搜索
     enable_rag: bool = False            # 是否使用使用私有知识库
     file_ids: List[str] = []

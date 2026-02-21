@@ -21,7 +21,7 @@ class ObjectStorage:
                 user_id=user_id,
                 conversation_id=conversation_id,
                 message_id=message_id,
-                filename=filename,
+                 filename=filename,
                 content=content,
                 content_type=content_type,
             )

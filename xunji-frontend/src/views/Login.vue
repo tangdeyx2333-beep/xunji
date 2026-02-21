@@ -22,12 +22,14 @@ const handleLogin = async () => {
   
   loading.value = true
   // 调用我们在 store 里写好的 login action
-  const success = await userStore.login(loginForm)
+  const result = await userStore.login(loginForm)
   loading.value = false
 
-  if (success) {
+  if (result.success) {
     ElMessage.success('登录成功')
     router.push('/') // 跳转到主页 (Chat)
+  } else {
+    ElMessage.error(result.message || '登录失败')
   }
 }
 </script>
@@ -38,7 +40,7 @@ const handleLogin = async () => {
       <template #header>
         <div class="auth-header">
           <h2>欢迎回来</h2>
-          <p>登录 Nova AI 开始对话</p>
+          <p>登录 Xunji 开始对话</p>
         </div>
       </template>
 
