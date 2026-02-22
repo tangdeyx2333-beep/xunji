@@ -56,6 +56,12 @@ class ModelManager:
             return ChatOpenAI(model=model_name)
             
         elif model_name.startswith("deepseek"):
+            if "thinking" in model_name.lower() or "reasoner" in model_name.lower():
+                return ChatOpenAI(
+                    model="deepseek-reasoner",
+                    api_key=os.getenv("DEEPSEEK_API_KEY"),
+                    base_url=os.getenv("DEEPSEEK_API_BASE"),
+                )
             return ChatOpenAI(
                 model=model_name,
                 api_key=os.getenv("DEEPSEEK_API_KEY"),

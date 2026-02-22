@@ -65,14 +65,34 @@ async def chat_response_generator(
     if saved_attachments:
         yield f"data: {json.dumps({'user_attachments_saved': saved_attachments})}\n\n"
 
-    if is_new_conversation:
+    # 6. 生成标题（新会话或每隔一定轮次）
+    should_generate_title = is_new_conversation
+    
+    if not should_generate_title:
         try:
+            # 检查消息数量，每 10 条消息（约 5 轮）重新生成一次
+            # 注意：这里的 db 是当前请求的 session，可以直接用
+            msg_count = db.query(Message).filter(Message.conversation_id == request.conversation_id).count()
+            if msg_count > 0 and msg_count % 10 == 0:
+                should_generate_title = True
+        except Exception as e:
+            print(f"Failed to check message count for title generation: {e}")
+
+    if should_generate_title:
+        try:
+            # 使用当前的 prompt 和 response 生成新标题
+            # 注意：request.message 是当前最新的用户输入
             new_title = await title_generator.generate_title(request.message, full_ai_response)
+            
+            # 使用新的 Session 更新数据库，避免影响当前 db session 的状态（虽然当前 db 马上要结束了）
+            # 这里用 SessionLocal 是为了保险，且与原逻辑保持一致
             with SessionLocal() as background_db:
                 conv = background_db.query(Conversation).filter(Conversation.id == request.conversation_id).first()
                 if conv:
                     conv.title = new_title
                     background_db.commit()
+            
+            # 推送新标题给前端
             yield f"data: {json.dumps({'new_title': new_title})}\n\n"
         except Exception as e:
             print(f"Failed to generate title: {e}")

@@ -49,6 +49,7 @@ class ConversationAiInstructionDTO(BaseModel):
 
 
 def _get_owned_conversation(db: Session, conversation_id: str, current_user: User) -> Conversation:
+    # 1. 先尝试严格匹配（当前用户拥有的会话）
     conversation = (
         db.query(Conversation)
         .filter(Conversation.id == conversation_id)
@@ -56,8 +57,10 @@ def _get_owned_conversation(db: Session, conversation_id: str, current_user: Use
         .filter(Conversation.is_deleted == False)
         .first()
     )
+    
     if not conversation:
         raise HTTPException(status_code=404, detail="会话不存在")
+        
     return conversation
 
 

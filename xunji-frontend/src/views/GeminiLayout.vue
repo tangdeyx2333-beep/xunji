@@ -409,12 +409,7 @@ watch(currentConversationId, async () => {
   await fetchConversationInstructions()
 })
 
-// 监听输入框内容变化，保持滚动位置
-watch(inputMessage, () => {
-  nextTick(() => {
-    scrollToBottom()
-  })
-})
+
 
 const fetchModelList = async () => {
   try {
@@ -690,7 +685,8 @@ const switchSession = async (session) => {
         html: isAI ? renderMarkdown(msg.content) : '',
         attachments: msg.attachments || [],
         loading: false,
-        done: true // 历史消息默认已完成
+        done: true, // 历史消息默认已完成
+        node_id: msg.node_id // 保留节点 ID
       }
     })
     
@@ -1152,7 +1148,8 @@ const handleTreeNodeClick = async (data) => {
             html: isAI ? renderMarkdown(msg.content) : '',
             attachments: msg.attachments || [],
             loading: false,
-            done: true
+            done: true,
+            node_id: msg.node_id // 保留节点 ID
           }
         })
     }
@@ -1167,6 +1164,16 @@ const handleTreeNodeClick = async (data) => {
     console.error(error)
     ElMessage.error('切换分支失败')
   }
+}
+
+// “继续聊天”按钮点击逻辑
+const handleContinueChat = async (msg) => {
+  if (!msg.node_id) {
+    ElMessage.warning('该消息无法作为新的起点')
+    return
+  }
+  // 复用 handleTreeNodeClick 的逻辑，它会获取路径并更新界面
+  await handleTreeNodeClick({ id: msg.node_id })
 }
 
 // 辅助：查找指定节点所在分支的最远叶子节点 (暂时不用，保留备用)
@@ -1413,6 +1420,14 @@ const sendMessage = async () => {
     },
     // onMeta: 收到元数据 (session_id, user_node_id, ai_node_id)
     (meta) => {
+      // 更新消息的节点 ID，以便后续可以“继续聊天”
+      if (meta.user_node_id && activeSessionState.messages.length >= 2) {
+          activeSessionState.messages[activeSessionState.messages.length - 2].node_id = meta.user_node_id
+      }
+      if (meta.ai_node_id) {
+          aiMessage.node_id = meta.ai_node_id
+      }
+
       // --- 处理新会话转正逻辑 ---
       if (meta.session_id) {
         if (isNewSession && !currentConversationId.value) {
@@ -1817,7 +1832,11 @@ const handleOpenClawConfigCommand = (command) => {
 
             <h3 style="margin-top: 20px">指令列表</h3>
             <el-table :data="aiInstructions" style="width: 100%" max-height="400" v-loading="isInstructionsLoading">
-              <el-table-column prop="content" label="内容" />
+              <el-table-column label="内容">
+                <template #default="scope">
+                  <div style="white-space: pre-wrap; word-break: break-word;">{{ scope.row.content }}</div>
+                </template>
+              </el-table-column>
               <el-table-column label="操作" width="170">
                 <template #default="scope">
                   <el-button link size="small" @click="moveInstructionUp(scope.row)" :disabled="scope.$index === 0">
@@ -1981,8 +2000,11 @@ const handleOpenClawConfigCommand = (command) => {
                    <div v-html="msg.html" @click="handleMarkdownClick"></div>
                    <!-- 复制按钮 -->
                    <div v-if="msg.done" class="message-actions">
-                     <el-button type="primary" plain size="small" @click="handleCopy(msg.content)">
-                       <el-icon style="margin-right: 4px"><CopyDocument /></el-icon> 
+                     <el-button type="primary" plain size="small" @click="handleCopy(msg.content)" title="复制">
+                       <el-icon><CopyDocument /></el-icon> 
+                     </el-button>
+                     <el-button v-if="msg.node_id" type="primary" plain size="small" @click="handleContinueChat(msg)" title="从这里继续聊天">
+                       <el-icon><Position /></el-icon>
                      </el-button>
                    </div>
                 </div>
@@ -2200,7 +2222,11 @@ const handleOpenClawConfigCommand = (command) => {
 
         <h3 style="margin-top: 20px">指令列表</h3>
         <el-table :data="conversationInstructions" style="width: 100%" max-height="320" v-loading="isConversationInstructionsLoading">
-          <el-table-column prop="content" label="内容" />
+          <el-table-column label="内容">
+            <template #default="scope">
+              <div style="white-space: pre-wrap; word-break: break-word;">{{ scope.row.content }}</div>
+            </template>
+          </el-table-column>
           <el-table-column label="操作" width="170">
             <template #default="scope">
               <el-button link size="small" @click="moveConversationInstructionUp(scope.row)" :disabled="scope.$index === 0">
@@ -2684,6 +2710,11 @@ $hover-color: #e3e3e3;
       font-size: 16px;
       color: #333;
       overflow-x: hidden;
+
+      .user-text {
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
 
       .message-attachments {
         margin-top: 8px;
