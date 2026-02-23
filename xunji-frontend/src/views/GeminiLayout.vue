@@ -7,7 +7,7 @@ import {
   Compass, DataLine, Trophy, Collection,
   Connection,
   Document, Paperclip, ArrowDown, Delete,
-  Share, CopyDocument, Position, Loading, SwitchButton, Close, UploadFilled, Service // 引入新图标
+  Share, CopyDocument, Position, Loading, SwitchButton, Close, UploadFilled, Service, Star, StarFilled // 引入新图标
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { openClawChatStream, connectOpenClaw, getOpenClawHistory, getOpenClawConfigs, createAndConnectOpenClaw } from '@/api/openclaw'
@@ -653,6 +653,7 @@ const switchSession = async (session) => {
     // 命中缓存，无需重新请求
     // 恢复滚动位置
     nextTick(() => {
+       isAutoScroll.value = true // 切换会话时重置自动滚动状态
        if (chatContainerRef.value && sessionCache[session.id].scrollTop !== undefined) {
           chatContainerRef.value.scrollTop = sessionCache[session.id].scrollTop
        } else {
@@ -696,6 +697,7 @@ const switchSession = async (session) => {
        sessionCache[session.id].currentLeafId = lastMsg.node_id
     }
     
+    isAutoScroll.value = true // 新加载的会话默认自动滚动
     scrollToBottom()
   } catch (error) {
     ElMessage.error("加载消息失败")
@@ -713,6 +715,8 @@ const startNewChat = () => {
   showConversationInstructions.value = false
   showChatTree.value = false
   currentConversationId.value = null
+  isAutoScroll.value = true // 新会话重置滚动状态
+
   // 重置临时状态
   tempNewSessionState.messages = []
   tempNewSessionState.currentLeafId = null
@@ -796,6 +800,23 @@ const handleLogout = () => {
   ElMessage.success('已退出登录')
 }
 
+const taggedNodeIds = ref([]) // 存储被标记的节点 ID 列表
+
+// 切换节点标记状态
+const toggleNodeTag = (nodeId) => {
+  if (!nodeId) return
+  const index = taggedNodeIds.value.indexOf(nodeId)
+  if (index > -1) {
+    taggedNodeIds.value.splice(index, 1)
+  } else {
+    taggedNodeIds.value.push(nodeId)
+  }
+  // 仅在树已打开时更新渲染，避免自动弹出
+  if (showChatTree.value) {
+    openChatTree()
+  }
+}
+
 // --- 聊天树逻辑 ---
 const openChatTree = async () => {
   if (!currentConversationId.value) return
@@ -834,6 +855,8 @@ function buildEChartsTree(items, highlightId) {
     const raw = (item.content || '').replace(/\s+/g, ' ').trim()
     const label = raw.length > 18 ? raw.substring(0, 18) + '...' : raw
     const isHL = highlightId && item.node_id === highlightId
+    const isTagged = taggedNodeIds.value.includes(item.node_id)
+    
     nodeMap[item.node_id] = { 
       name: `${item.role === 'user' ? '用户' : 'AI'}\n${label}`,
       id: item.node_id, // 存储真实ID用于点击
@@ -842,23 +865,30 @@ function buildEChartsTree(items, highlightId) {
       original: item,
       // 样式配置
       itemStyle: {
-        color: isHL ? '#fffbe6' : '#fff',
-        borderColor: isHL ? '#f56c6c' : '#000',
-        borderWidth: isHL ? 3 : 1.5,
+        color: isTagged ? '#ffecd9' : (isHL ? '#fffbe6' : '#fff'), // 标记节点底色
+        borderColor: isTagged ? '#ff9900' : (isHL ? '#f56c6c' : '#000'), // 标记节点边框
+        borderWidth: isTagged ? 2.5 : (isHL ? 3 : 1.5),
+        shadowBlur: isTagged ? 10 : 0,
+        shadowColor: isTagged ? 'rgba(255, 153, 0, 0.5)' : 'transparent'
       },
       label: {
+        show: true,
         color: '#000',
         fontSize: 12,
         align: 'center',
         verticalAlign: 'middle',
-        backgroundColor: isHL ? '#fde047' : 'transparent'
+        backgroundColor: isHL ? '#fde047' : 'transparent',
+        formatter: function(params) {
+             const base = params.name
+             return isTagged ? `★ ${base}` : base
+        }
       },
       // 矩形节点
       symbol: 'rect',
       symbolSize: isHL ? [140, 50] : [120, 40]
     }
   })
-
+  
   // 2. 组装树
   items.forEach(item => {
     if (!item.node_id) return
@@ -870,7 +900,7 @@ function buildEChartsTree(items, highlightId) {
     }
   })
   
-  // ECharts Tree 只支持单根节点，如果有多个根（通常不会），需要创建一个虚拟根
+  // ECharts Tree 只支持单根节点
   if (rootNodes.length === 1) return rootNodes[0]
   return {
     name: 'Root',
@@ -879,6 +909,8 @@ function buildEChartsTree(items, highlightId) {
     label: { show: false }
   }
 }
+
+
 
 const computeTreeLayoutStats = (root) => {
   const levelCounts = []
@@ -918,6 +950,12 @@ const findNodeAndDepth = (node, targetId, currentDepth = 0) => {
 const initEChartsTree = (data, highlightNodeId) => {
   const chartDom = document.getElementById('echarts-tree-container')
   if (!chartDom) return
+
+  // 挂载全局点击事件
+  window.handleTreeNodeTag = (nodeId) => {
+      // 在 Vue 作用域内调用
+      toggleNodeTag(nodeId)
+  }
   
   // 销毁旧实例
   let myChart = echarts.getInstanceByDom(chartDom)
@@ -940,18 +978,42 @@ const initEChartsTree = (data, highlightNodeId) => {
     tooltip: {
       trigger: 'item',
       triggerOn: 'mousemove',
-      extraCssText: 'max-width: 400px; white-space: normal; word-break: break-all;', // 限制宽度并允许换行
+      enterable: true, // 允许鼠标进入 tooltip
+      extraCssText: 'max-width: 400px; white-space: normal; word-break: break-all; pointer-events: auto;', // 允许交互
       formatter: function (params) {
-         // 悬浮显示完整内容
          const original = params.data.original
          if (original) {
              const role = original.role === 'user' ? '用户' : 'AI'
-             let content = original.content
-             // 限制为 200 字，超出显示省略号
+             let content = original.content || ''
              if (content.length > 200) {
                  content = content.substring(0, 200) + '...'
              }
-             return `<strong>${role}</strong>:<br/>${content}`
+             
+             // 检查是否被标记
+             const isTagged = taggedNodeIds.value.includes(original.node_id)
+             const btnText = isTagged ? '取消标记' : '标记节点'
+             const btnColor = isTagged ? '#f56c6c' : '#409eff'
+             
+             // 构建 HTML，包含一个可点击的按钮
+             // 注意：ECharts tooltip 中的点击事件比较难处理，通常使用全局函数或者通过 id 捕获
+             // 这里使用 window 全局函数是一个简单的 hack 方法，但在 Vue 中更好是用全局事件总线或者挂载到 window
+             
+             // 为了安全和简单，我们先返回带 onclick 的 HTML
+             // 需要在组件挂载时将处理函数暴露给 window
+             return `
+               <div>
+                 <div><strong>${role}</strong>:</div>
+                 <div style="margin: 5px 0;">${content}</div>
+                 <div style="margin-top: 8px; border-top: 1px solid #eee; padding-top: 5px; text-align: right;">
+                   <button 
+                     onclick="window.handleTreeNodeTag('${original.node_id}')"
+                     style="background: ${btnColor}; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;"
+                   >
+                     ${btnText}
+                   </button>
+                 </div>
+               </div>
+             `
          }
          return params.name
       }
@@ -1286,6 +1348,26 @@ const endSending = (sessionState, parentKey) => {
   sessionState.isSending = Object.keys(sessionState.sendingByParent).length > 0
 }
 
+const handleEnterKey = (e) => {
+  // 1. 如果是 Shift+Enter，允许默认换行行为
+  if (e.shiftKey) {
+    return
+  }
+
+  // 2. 如果当前输入框内容包含换行符（即已经是多行模式），Enter 键也作为换行处理
+  // 注意：需要手动阻止默认行为并插入换行，或者直接允许默认行为？
+  // 如果允许默认行为，会插入换行，符合预期。
+  // 但是用户说 "shift+enter也是换行，只能点击图标才能发送"
+  // 这意味着在多行模式下，Enter 键不再发送，而是换行。
+  if (inputMessage.value.includes('\n')) {
+    return
+  }
+
+  // 3. 单行模式下，Enter 键发送
+  e.preventDefault()
+  sendMessage()
+}
+
 // ★★★ 发送消息核心逻辑 (改为流式调用) ★★★
 const sendMessage = async () => {
   // 发送消息前确保设置弹窗关闭
@@ -1330,6 +1412,7 @@ const sendMessage = async () => {
   beginSending(activeSessionState, parentKeyAtSend)
 
   // --- 2. 用户消息上屏 ---
+  isAutoScroll.value = true
   activeSessionState.messages.push({ role: 'user', content: text, attachments: attachmentsSnapshot })
   inputMessage.value = ''
   currentAttachments.value = []
@@ -1372,37 +1455,51 @@ const sendMessage = async () => {
     endSending(targetState, parentKeyAtSend)
   }
 
+  // --- 节流渲染辅助 ---
+  let lastRenderTime = 0
+  let pendingRender = false
+  
+  const throttledUpdate = () => {
+    if (Date.now() - lastRenderTime > 50) { // 50ms 节流 (20fps)
+      aiMessage.html = renderMarkdown(fullText)
+      lastRenderTime = Date.now()
+      
+      // 手动触发滚动，绕过 watch
+      if (isAutoScroll.value) {
+        scrollToBottom()
+      }
+    } else if (!pendingRender) {
+      pendingRender = true
+      requestAnimationFrame(() => {
+        aiMessage.html = renderMarkdown(fullText)
+        lastRenderTime = Date.now()
+        pendingRender = false
+        if (isAutoScroll.value) {
+          scrollToBottom()
+        }
+      })
+    }
+  }
+
   await chatStream(
     payload,
     // onMessage: 收到片段
     (chunk) => {
-      // 智能滚动逻辑：只有当【当前视图】就是【发起请求的会话】时，才处理滚动
-      // 否则只更新数据，不滚动
-      const isViewingRequestSession = currentConversationId.value === requestSessionId
-      
-      let shouldScroll = false
-      if (isViewingRequestSession) {
-          const el = chatContainerRef.value
-          if (el) {
-              const threshold = 100 
-              const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-              shouldScroll = distanceToBottom < threshold
-          }
-      }
-
       aiMessage.loading = false
       fullText += chunk
       aiMessage.content = fullText
-      aiMessage.html = renderMarkdown(fullText)
+      // aiMessage.html = renderMarkdown(fullText) // 移除全量更新
       
-      if (shouldScroll) {
-          scrollToBottom()
-      }
+      throttledUpdate() // 使用节流更新
     },
     // onDone: 完成
     () => {
       aiMessage.loading = false
       aiMessage.done = true 
+      // 确保最后一次完整渲染
+      aiMessage.html = renderMarkdown(fullText)
+      if (isAutoScroll.value) scrollToBottom()
+
       endOnce()
       
       // 如果是新会话，流结束后刷新列表以显示新标题
@@ -1685,11 +1782,30 @@ watch(viewMessages, async (messages) => {
 }, { deep: true, immediate: true })
 
 // 辅助方法
-const scrollToBottom = () => {
-  nextTick(() => {
-    if (chatContainerRef.value) chatContainerRef.value.scrollTop = chatContainerRef.value.scrollHeight
-  })
+
+// --- 滚动优化逻辑 ---
+const isAutoScroll = ref(true)
+
+const handleScroll = () => {
+  if (!chatContainerRef.value) return
+  const { scrollTop, scrollHeight, clientHeight } = chatContainerRef.value
+  const distanceToBottom = scrollHeight - scrollTop - clientHeight
+  isAutoScroll.value = distanceToBottom < 50
 }
+
+const scrollToBottom = () => {
+  if (chatContainerRef.value) {
+    requestAnimationFrame(() => {
+      if (chatContainerRef.value) {
+        chatContainerRef.value.scrollTo({
+          top: chatContainerRef.value.scrollHeight,
+          behavior: 'auto'
+        })
+      }
+    })
+  }
+}
+
 const clickCard = (text) => {
   inputMessage.value = text
   sendMessage()
@@ -1977,7 +2093,7 @@ const handleOpenClawConfigCommand = (command) => {
           </el-dropdown>
         </header>
 
-      <div class="content-scroll-area" ref="chatContainerRef">
+      <div class="content-scroll-area" ref="chatContainerRef" @scroll="handleScroll">
         <div v-if="!isChattingView" class="welcome-container">
           <div class="greeting">
             <h1 class="gradient-text">Hello, Developer</h1>
@@ -2004,9 +2120,23 @@ const handleOpenClawConfigCommand = (command) => {
                        <el-icon><CopyDocument /></el-icon> 
                      </el-button>
                      <el-button v-if="msg.node_id" type="primary" plain size="small" @click="handleContinueChat(msg)" title="从这里继续聊天">
-                       <el-icon><Position /></el-icon>
-                     </el-button>
-                   </div>
+                      <el-icon><Position /></el-icon>
+                    </el-button>
+                    <!-- 标记节点按钮 -->
+                    <el-button 
+                      v-if="msg.node_id" 
+                      :type="taggedNodeIds.includes(msg.node_id) ? 'warning' : 'primary'" 
+                      plain 
+                      size="small" 
+                      @click="toggleNodeTag(msg.node_id)" 
+                      :title="taggedNodeIds.includes(msg.node_id) ? '取消标记' : '标记节点'"
+                    >
+                      <el-icon>
+                        <StarFilled v-if="taggedNodeIds.includes(msg.node_id)" />
+                        <Star v-else />
+                      </el-icon>
+                    </el-button>
+                  </div>
                 </div>
               </div>
               <div v-else class="user-text">
@@ -2072,7 +2202,7 @@ const handleOpenClawConfigCommand = (command) => {
             :placeholder="isOpenClawMode ? '问问 OpenClaw' : (selectedCount > 0 ? `已引用 ${selectedCount} 个文件...` : '问问 xunji (支持粘贴图片/文件)')"
             class="gemini-input" 
             resize="none" 
-            @keydown.enter.exact.prevent="sendMessage"
+            @keydown.enter="handleEnterKey"
             @paste="handlePaste"
           />
 
@@ -2608,6 +2738,7 @@ $hover-color: #e3e3e3;
   display: flex;
   flex-direction: column;
   align-items: center;
+  overflow-anchor: auto;
 
   &::-webkit-scrollbar {
     width: 6px;
