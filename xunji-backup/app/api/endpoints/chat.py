@@ -73,6 +73,7 @@ async def chat_response_generator(
             # 检查消息数量，每 10 条消息（约 5 轮）重新生成一次
             # 注意：这里的 db 是当前请求的 session，可以直接用
             msg_count = db.query(Message).filter(Message.conversation_id == request.conversation_id).count()
+            print("msg_count ", msg_count)
             if msg_count > 0 and msg_count % 10 == 0:
                 should_generate_title = True
         except Exception as e:
