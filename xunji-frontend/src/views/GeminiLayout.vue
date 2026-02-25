@@ -27,6 +27,27 @@ const APP_NAME = ref("xunji")
 const userStore = useUserStore()
 const chatContainerRef = ref(null)
 
+// 随机身份逻辑
+const guestUser = ref({ username: 'Guest', color: '#7B3DCC' })
+
+const generateGuestUser = () => {
+  const randomId = Math.floor(Math.random() * 10000).toString().padStart(4, '0')
+  const colors = ['#f56c6c', '#e6a23c', '#67c23a', '#409eff', '#909399', '#7B3DCC', '#FF5722', '#00BCD4']
+  const randomColor = colors[Math.floor(Math.random() * colors.length)]
+  guestUser.value = {
+    username: `Guest_${randomId}`,
+    color: randomColor
+  }
+}
+
+const currentUser = computed(() => {
+  if (userStore.token && userStore.userInfo && userStore.userInfo.username) {
+    // 登录用户固定紫色
+    return { ...userStore.userInfo, color: '#7B3DCC' }
+  }
+  return guestUser.value
+})
+
 // --- 2. 界面状态 ---
 // ★★★ 新增：Session Cache ★★★
 const sessionCache = reactive({
@@ -58,9 +79,9 @@ const availableModels = ref([
   // 默认模型 (可以被后端数据覆盖或合并)
   { model_name: 'deepseek-chat', display_name: 'DeepSeek Chat' },
   { model_name: 'deepseek-chat-thinking', display_name: 'DeepSeek Chat Thinking' },
-  { model_name: 'kimi-k2.5', display_name: 'Kimi-k2.5 多模态' },
-  { model_name: 'kimi-k2-thinking', display_name: 'Kimi-k2 Thinking' },
-  { model_name: 'qwen3-max', display_name: 'Qwen3 Max' },
+  // { model_name: 'kimi-k2.5', display_name: 'Kimi-k2.5 多模态' },
+  // { model_name: 'kimi-k2-thinking', display_name: 'Kimi-k2 Thinking' },
+  // { model_name: 'qwen3-max', display_name: 'Qwen3 Max' },
 
 ])
 const newModelForm = reactive({ model_name: '', display_name: '' })
@@ -179,7 +200,6 @@ const fetchOpenClawConfigs = async () => {
     openClawConfigs.value = configs || []
   } catch (error) {
     console.error('获取OpenClaw配置失败:', error)
-    ElMessage.error('获取OpenClaw配置失败')
   }
 }
 
@@ -195,7 +215,6 @@ const selectOpenClawConfig = async (config) => {
     }
   } catch (error) {
     console.error('切换OpenClaw配置失败:', error)
-    ElMessage.error('切换配置失败: ' + (error.message || '未知错误'))
   }
 }
 
@@ -207,7 +226,6 @@ const handleSelectOpenClawConfig = async () => {
   
   const config = openClawConfigs.value.find(c => c.id === selectedConfigId.value)
   if (!config) {
-    ElMessage.error('配置不存在')
     return
   }
   
@@ -223,7 +241,6 @@ const connectOpenClawByConfig = async (configId) => {
     await loadOpenClawHistory(configId)
   } catch (error) {
     console.error('连接OpenClaw失败:', error)
-    ElMessage.error('连接OpenClaw失败: ' + error.message)
     throw error
   } finally {
     isOpenClawConnecting.value = false
@@ -252,7 +269,6 @@ const loadOpenClawHistory = async (configId) => {
     openClawState.messages = formattedHistory
   } catch (error) {
     console.error('加载OpenClaw历史记录失败:', error)
-    ElMessage.error('加载历史记录失败')
     throw error
   }
 }
@@ -289,7 +305,6 @@ const enterOpenClawMode = async () => {
   try {
     await loadOpenClawHistory(currentOpenClawConfig.value.id)
   } catch (error) {
-    ElMessage.error('加载 OpenClaw 历史记录失败，请检查控制台')
     console.error('OpenClaw 历史记录加载错误详情:', error)
   }
 
@@ -384,6 +399,12 @@ const selectedCount = computed(() => selectedFileIds.value.length)
 
 // --- 5. 生命周期 ---
 onMounted(async () => {
+  // 如果没有 Token，生成随机 Guest 身份
+  if (!userStore.token) {
+    userStore.logout() // 确保清理残留的 userInfo
+    generateGuestUser()
+  }
+
   await fetchFileList()
   await fetchSessionList()
   await fetchModelList()
@@ -420,12 +441,13 @@ const fetchModelList = async () => {
     
     // 简单的合并策略：默认模型 + 自定义模型
     // 实际生产中可能希望完全由后端控制
-    const defaultModels = [
-      { model_name: 'deepseek-chat', display_name: 'DeepSeek Chat' },
-      { model_name: 'kimi-k2.5', display_name: 'Kimi-k2.5 多模态' },
-      { model_name: 'kimi-k2-thinking', display_name: 'Kimi-k2 Thinking' },
-      { model_name: 'qwen3-max', display_name: 'Qwen3 Max' },
-    ]
+    const defaultModels = availableModels
+    // [
+    //   { model_name: 'deepseek-chat', display_name: 'DeepSeek Chat' },
+    //   { model_name: 'kimi-k2-thinking', display_name: 'Kimi-k2 Thinking' },
+    //   // { model_name: 'kimi-k2.5', display_name: 'Kimi-k2.5 多模态' },
+    //   // { model_name: 'qwen3-max', display_name: 'Qwen3 Max' },
+    // ]
     
     // 过滤掉已经在 customModels 里的默认模型 (按 model_name)
     const existingNames = new Set(customModels.map(m => m.model_name))
@@ -444,7 +466,6 @@ const fetchInstructions = async () => {
     aiInstructions.value = Array.isArray(res) ? res : []
   } catch (error) {
     console.error('加载 AI 指令失败:', error)
-    ElMessage.error('加载 AI 指令失败')
   } finally {
     isInstructionsLoading.value = false
   }
@@ -463,7 +484,7 @@ const handleAddInstruction = async () => {
     ElMessage.success('添加成功')
     await fetchInstructions()
   } catch (error) {
-    ElMessage.error(error?.message || '添加失败')
+    console.error('添加失败:', error)
   } finally {
     isInstructionSubmitting.value = false
   }
@@ -475,7 +496,7 @@ const handleDeleteInstruction = async (row) => {
     ElMessage.success('删除成功')
     await fetchInstructions()
   } catch (error) {
-    ElMessage.error(error?.message || '删除失败')
+    console.error('删除失败:', error)
   }
 }
 
@@ -487,9 +508,10 @@ const moveInstructionUp = async (row) => {
   try {
     await updateInstruction(curr.id, { sort_order: prev.sort_order })
     await updateInstruction(prev.id, { sort_order: curr.sort_order })
+    ElMessage.success('排序已更新')
     await fetchInstructions()
   } catch (error) {
-    ElMessage.error(error?.message || '排序调整失败')
+    console.error('排序调整失败:', error)
   }
 }
 
@@ -501,9 +523,10 @@ const moveInstructionDown = async (row) => {
   try {
     await updateInstruction(curr.id, { sort_order: next.sort_order })
     await updateInstruction(next.id, { sort_order: curr.sort_order })
+    ElMessage.success('排序已更新')
     await fetchInstructions()
   } catch (error) {
-    ElMessage.error(error?.message || '排序调整失败')
+    console.error('排序调整失败:', error)
   }
 }
 
@@ -518,7 +541,6 @@ const fetchConversationInstructions = async () => {
     conversationInstructions.value = Array.isArray(res) ? res : []
   } catch (error) {
     console.error('加载会话指令失败:', error)
-    ElMessage.error('加载会话指令失败')
   } finally {
     isConversationInstructionsLoading.value = false
   }
@@ -541,7 +563,7 @@ const handleAddConversationInstruction = async () => {
     ElMessage.success('添加成功')
     await fetchConversationInstructions()
   } catch (error) {
-    ElMessage.error(error?.message || '添加失败')
+    console.error('添加会话指令失败:', error)
   } finally {
     isConversationInstructionSubmitting.value = false
   }
@@ -554,7 +576,7 @@ const handleDeleteConversationInstruction = async (row) => {
     ElMessage.success('删除成功')
     await fetchConversationInstructions()
   } catch (error) {
-    ElMessage.error(error?.message || '删除失败')
+    console.error('删除会话指令失败:', error)
   }
 }
 
@@ -567,9 +589,10 @@ const moveConversationInstructionUp = async (row) => {
   try {
     await updateConversationInstruction(currentConversationId.value, curr.id, { sort_order: prev.sort_order })
     await updateConversationInstruction(currentConversationId.value, prev.id, { sort_order: curr.sort_order })
+    ElMessage.success('排序已更新')
     await fetchConversationInstructions()
   } catch (error) {
-    ElMessage.error(error?.message || '排序调整失败')
+    console.error('排序调整失败:', error)
   }
 }
 
@@ -582,9 +605,10 @@ const moveConversationInstructionDown = async (row) => {
   try {
     await updateConversationInstruction(currentConversationId.value, curr.id, { sort_order: next.sort_order })
     await updateConversationInstruction(currentConversationId.value, next.id, { sort_order: curr.sort_order })
+    ElMessage.success('排序已更新')
     await fetchConversationInstructions()
   } catch (error) {
-    ElMessage.error(error?.message || '排序调整失败')
+    console.error('排序调整失败:', error)
   }
 }
 
@@ -600,7 +624,8 @@ const handleAddModel = async () => {
     newModelForm.display_name = ''
     await fetchModelList()
   } catch (error) {
-    ElMessage.error(error.message || '添加失败')
+    // 已经在拦截器中处理了通用错误弹窗，这里可以仅记录日志或处理特定业务逻辑
+    console.error('添加模型失败:', error)
   }
 }
 
@@ -618,7 +643,7 @@ const handleDeleteModel = async (model) => {
        currentModel.value = 'deepseek-chat'
     }
   } catch (error) {
-    ElMessage.error('删除失败')
+    console.error('删除模型失败:', error)
   }
 }
 
@@ -700,7 +725,7 @@ const switchSession = async (session) => {
     isAutoScroll.value = true // 新加载的会话默认自动滚动
     scrollToBottom()
   } catch (error) {
-    ElMessage.error("加载消息失败")
+    console.error("加载消息失败:", error)
     // 加载失败，清理缓存防止下次误判
     delete sessionCache[session.id]
   }
@@ -737,7 +762,7 @@ const removeSession = async (e, id) => {
       startNewChat()
     }
   } catch (error) {
-    ElMessage.error('删除失败')
+    console.error('删除失败:', error)
   }
 }
 
@@ -761,8 +786,7 @@ const handleUpgradeAccount = async () => {
     }
     ElMessage.success('账号已升级')
   } catch (error) {
-    const message = error?.response?.data?.detail || '升级失败'
-    ElMessage.error(message)
+    console.error('账号升级失败:', error)
   } finally {
     isAccountUpgrading.value = false
   }
@@ -788,8 +812,7 @@ const handleRecoverAccount = async () => {
     }
     ElMessage.success('恢复成功')
   } catch (error) {
-    const message = error?.response?.data?.detail || '恢复失败'
-    ElMessage.error(message)
+    console.error('恢复账号失败:', error)
   } finally {
     isAccountRecovering.value = false
   }
@@ -797,7 +820,32 @@ const handleRecoverAccount = async () => {
 
 const handleLogout = () => {
   userStore.logout()
-  ElMessage.success('已退出登录')
+  
+  // 生成新随机身份
+  generateGuestUser()
+  
+  // 清理当前会话状态
+  currentConversationId.value = null
+  historyList.value = []
+  
+  // 清空缓存
+  for (const key in sessionCache) {
+    delete sessionCache[key]
+  }
+  
+  // 重置临时会话
+  tempNewSessionState.messages = []
+  tempNewSessionState.currentLeafId = null
+  tempNewSessionState.isSending = false
+  tempNewSessionState.sendingByParent = {}
+
+  // 强制刷新一次设备指纹（因为 logout 删除了 device_id）
+  // 这样下次请求时会生成新的，避免后端关联旧会话
+  import('@/utils/deviceFingerprint').then(({ getOrCreateDeviceId }) => {
+    getOrCreateDeviceId()
+  })
+
+  ElMessage.success('已注销，切换为随机访客身份')
 }
 
 const taggedNodeIds = ref([]) // 存储被标记的节点 ID 列表
@@ -840,8 +888,7 @@ const openChatTree = async () => {
     })
     
   } catch (error) {
-    ElMessage.error('加载聊天树失败')
-    console.error(error)
+    console.error('加载聊天树失败:', error)
   }
 }
 
@@ -1223,8 +1270,7 @@ const handleTreeNodeClick = async (data) => {
     ElMessage.success('已切换到选中节点')
     
   } catch (error) {
-    console.error(error)
-    ElMessage.error('切换分支失败')
+    console.error('切换分支失败:', error)
   }
 }
 
@@ -1635,7 +1681,7 @@ const handleDeleteKnowledgeFile = async (fileId) => {
     await fetchFileList()
     ElMessage.success('删除成功')
   } catch (e) {
-    ElMessage.error('删除失败')
+    console.error('删除知识库文件失败:', e)
   }
 }
 
@@ -1650,7 +1696,7 @@ const handleClearKnowledgeBase = async () => {
     await fetchFileList()
     ElMessage.success('知识库已清空')
   } catch (e) {
-    ElMessage.error('清空失败')
+    console.error('清空知识库失败:', e)
   }
 }
 
@@ -2082,7 +2128,13 @@ const handleOpenClawConfigCommand = (command) => {
 
           <!-- 用户头像下拉菜单 -->
           <el-dropdown trigger="click" @command="(cmd) => cmd === 'logout' && handleLogout()">
-            <el-avatar :size="32" class="user-avatar cursor-pointer" style="margin-left: 12px">U</el-avatar>
+            <el-avatar 
+              :size="32" 
+              class="user-avatar cursor-pointer" 
+              :style="{ backgroundColor: currentUser.color, marginLeft: '12px' }"
+            >
+              {{ (currentUser.username?.[0] || 'U').toUpperCase() }}
+            </el-avatar>
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item command="logout" style="color: #f56c6c;">
@@ -2104,8 +2156,14 @@ const handleOpenClawConfigCommand = (command) => {
         <div v-else class="chat-list">
           <div v-for="(msg, index) in viewMessages" :key="index" class="message" :class="msg.role">
             <div class="avatar-col">
-              <!-- 用户头像: 紫色背景 + 白色字母 -->
-              <div v-if="msg.role === 'user'" class="avatar-circle user-theme">U</div>
+              <!-- 用户头像: 动态颜色 + 字母 -->
+              <div 
+                v-if="msg.role === 'user'" 
+                class="avatar-circle" 
+                :style="{ backgroundColor: currentUser.color }"
+              >
+                {{ (currentUser.username?.[0] || 'U').toUpperCase() }}
+              </div>
               <!-- AI头像: 恢复带有动画的 AI Logo -->
               <div v-else class="ai-logo">✨</div>
             </div>

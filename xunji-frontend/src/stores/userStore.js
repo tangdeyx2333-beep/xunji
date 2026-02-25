@@ -48,7 +48,8 @@ export const useUserStore = defineStore('user', () => {
     userInfo.value = {}
     localStorage.removeItem('access_token')
     localStorage.removeItem('user_info')
-    // 可以在这里做路由跳转，或者在组件里做
+    // 用户要求注销时也删除设备码
+    localStorage.removeItem('device_id')
   }
 
   return {

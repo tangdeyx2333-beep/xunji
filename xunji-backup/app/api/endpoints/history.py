@@ -6,7 +6,8 @@ from pydantic import BaseModel
 from datetime import datetime
 
 from app.db.session import get_db
-from app.models.sql_models import Conversation, Message, TreeNode, MessageAttachment
+from app.models.sql_models import Conversation, Message, TreeNode, MessageAttachment, User
+from app.api.deps import get_current_user
 
 router = APIRouter()
 
@@ -40,12 +41,14 @@ class MessageDTO(BaseModel):
 @router.get("/conversations", response_model=List[ConversationDTO])
 async def get_conversations(
         limit: int = 20,
-        db: Session = Depends(get_db)
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user)
 ):
     """
-    获取所有会话列表，按更新时间倒序排列（最近聊的在最上面）
+    获取当前用户的会话列表，按更新时间倒序排列（最近聊的在最上面）
     """
     conversations = db.query(Conversation) \
+        .filter(Conversation.user_id == current_user.id) \
         .filter(Conversation.is_deleted == False) \
         .order_by(Conversation.updated_at.desc()) \
         .limit(limit) \
@@ -57,13 +60,17 @@ async def get_conversations(
 @router.get("/conversations/{conversation_id}/messages", response_model=List[MessageDTO])
 async def get_messages(
         conversation_id: str,
-        db: Session = Depends(get_db)
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user)
 ):
     """
     加载具体的聊天记录
     """
-    # 1. 检查会话是否存在
-    conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    # 1. 检查会话是否存在且属于当前用户
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id,
+        Conversation.user_id == current_user.id
+    ).first()
     if not conversation:
         raise HTTPException(status_code=404, detail="会话不存在")
 
@@ -110,12 +117,16 @@ async def get_messages(
 @router.delete("/conversations/{conversation_id}")
 async def delete_conversation(
         conversation_id: str,
-        db: Session = Depends(get_db)
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user)
 ):
     """
     删除会话（前端点击垃圾桶图标）
     """
-    conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id,
+        Conversation.user_id == current_user.id
+    ).first()
     if not conversation:
         raise HTTPException(status_code=404, detail="会话不存在")
 
@@ -127,16 +138,23 @@ async def delete_conversation(
 
 # --- 接口 4: 根据节点ID获取完整路径消息 (面包屑) ---
 @router.get("/tree/path/{node_id}", response_model=List[MessageDTO])
-async def get_node_path(node_id: str, db: Session = Depends(get_db)):
+async def get_node_path(
+        node_id: str, 
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user)
+):
     """
     根据指定节点ID，向上递归获取完整路径上的所有消息（从根节点 -> 当前节点）
     """
     from sqlalchemy import text
     
-    # 检查节点是否存在
-    target_node = db.query(TreeNode).filter(TreeNode.id == node_id).first()
+    # 检查节点是否存在，并间接检查是否属于当前用户
+    target_node = db.query(TreeNode).join(Message).join(Conversation).filter(
+        TreeNode.id == node_id,
+        Conversation.user_id == current_user.id
+    ).first()
     if not target_node:
-        raise HTTPException(status_code=404, detail="Node not found")
+        raise HTTPException(status_code=404, detail="Node not found or access denied")
 
     # 使用 CTE 递归查询路径
     # 注意：SQLite 和 Postgres 都支持 WITH RECURSIVE

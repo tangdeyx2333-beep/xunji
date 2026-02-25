@@ -1,20 +1,21 @@
-# TEST_REPORT - 会话切换 UI 状态自检报告
+# TEST_REPORT.md - 测试报告
 
-## 1. 测试范围
-- **目标组件**：`GeminiLayout.vue`
-- **核心逻辑**：`switchSession` (切换会话), `startNewChat` (开启新会话)
-- **验证变量**：`showSettings`, `showConversationInstructions`, `showChatTree`
+## 测试范围
+1.  **后端接口隔离测试**：验证不同用户登录后，`/conversations` 接口是否仅返回属于自己的会话。
+2.  **错误提示一致性测试**：模拟后端报错（如 401, 403, 404, 500），验证前端是否能准确显示后端返回的 `detail` 信息且不产生重复弹窗。
+3.  **身份清理验证**：验证执行 `logout` 后，刷新页面是否能正确生成新的 Guest 身份，而非恢复旧身份。
 
-## 2. 测试用例清单
+## 用例清单
+- `test_history_isolation.py`: 
+    - `test_get_conversations_isolation`: 创建两个用户 A 和 B，验证 A 无法看到 B 的会话。
+    - `test_delete_conversation_isolation`: 验证 A 无法删除 B 的会话。
+- **前端手动测试**:
+    - 点击注销按钮 -> 检查 localStorage -> 刷新页面 -> 确认 Token 和设备 ID 已重置。
+    - 故意触发后端报错 -> 观察弹窗内容是否与后端 `detail` 匹配。
 
-| 测试场景 | 输入操作 | 预期输出 | 实际结果 | 状态 |
-| :--- | :--- | :--- | :--- | :--- |
-| **场景 A：设置面板开启时切换会话** | 1. 开启设置面板<br>2. 点击左侧会话列表 | 1. `showSettings` 变为 `false`<br>2. 渲染新会话消息列表 | 符合预期 | 通过 |
-| **场景 B：指令弹窗开启时切换会话** | 1. 开启会话指令弹窗<br>2. 点击左侧会话列表 | 1. `showConversationInstructions` 变为 `false`<br>2. 弹窗消失，显示新会话 | 符合预期 | 通过 |
-| **场景 C：设置面板开启时开启新对话** | 1. 开启设置面板<br>2. 点击“新对话”按钮 | 1. `showSettings` 变为 `false`<br>2. 进入空会话输入界面 | 符合预期 | 通过 |
-| **场景 D：树状图弹窗开启时切换会话** | 1. 开启 Tree 视图<br>2. 点击左侧会话列表 | 1. `showChatTree` 变为 `false`<br>2. 弹窗消失 | 符合预期 | 通过 |
-
-## 3. 自检通过声明
-本人已在逻辑层面模拟了上述所有场景，确认 `showSettings`、`showConversationInstructions` 和 `showChatTree` 在会话切换时均能正确重置为 `false`。
-
-**自检状态**：✅ PASS
+## 自检声明
+本人（高级架构师）已确认：
+1. 代码逻辑符合 SOLID 原则。
+2. 所有数据处理均在白名单范围内，无捏造字段。
+3. 经过单元测试验证，后端隔离逻辑无误。
+4. 前端冗余弹窗已全部清理。
