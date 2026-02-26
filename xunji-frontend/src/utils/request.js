@@ -1,6 +1,6 @@
 // src/utils/request.js
 import axios from 'axios'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElNotification } from 'element-plus'
 import { getOrCreateDeviceId } from './deviceFingerprint'
 
 // const apiBaseUrl = import.meta.env.VITE_API_BASE_URL
@@ -39,10 +39,13 @@ service.interceptors.response.use(
   },
   (error) => {
       // 统一错误处理
+      console.log('全局错误捕获:', error)
       if (error.response) {
         const status = error.response.status
         const detail = error.response.data?.detail
         
+        console.log(`HTTP ${status} Error:`, detail)
+
         let message = '请求失败'
         if (typeof detail === 'string') {
           message = detail
@@ -53,24 +56,58 @@ service.interceptors.response.use(
           message = error.message
         }
         
-        // 401 单独处理，避免重复弹窗
+        console.log('解析后的错误消息:', message)
+
+        // 401 单独处理
         if (status === 401) {
-          // 可选：清除 token，但让业务层决定是否跳转
+          // 清除 token
           localStorage.removeItem('access_token')
+          // 对于账号恢复/登录场景，401 代表用户名或密码错误，需要弹窗提示
+          ElNotification.error({
+             title: '认证失败',
+             message: message || '用户名或密码错误',
+             position: 'top-right'
+          })
           return Promise.reject(error)
         }
         
+        // 400 错误处理 (通常是业务逻辑错误，如重复添加)
+        if (status === 400) {
+           console.log('触发 400 错误弹窗逻辑')
+           ElNotification.error({
+             title: '操作失败',
+             message: message,
+             position: 'top-right'
+           })
+           return Promise.reject(error)
+        }
+
         // 422 参数校验错误，通常是前端传参问题
         if (status === 422) {
-           ElMessage.error(`参数校验失败: ${message}`)
+           console.log('触发 422 错误弹窗逻辑')
+           ElNotification.error({
+             title: '参数校验失败',
+             message: message,
+             position: 'top-right'
+           })
            return Promise.reject(error)
         }
 
         // 其它错误弹窗
-        ElMessage.error(message)
+        console.log('触发通用错误弹窗逻辑')
+        ElNotification.error({
+          title: '错误',
+          message: message,
+          position: 'top-right'
+        })
         return Promise.reject(error)
       } else {
-        ElMessage.error('网络连接异常，请检查后端服务是否启动')
+        console.log('触发网络错误弹窗逻辑')
+        ElNotification.error({
+          title: '网络错误',
+          message: '网络连接异常，请检查后端服务是否启动',
+          position: 'top-right'
+        })
         return Promise.reject(error)
       }
   }

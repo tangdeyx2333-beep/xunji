@@ -9,7 +9,7 @@ import {
   Document, Paperclip, ArrowDown, Delete,
   Share, CopyDocument, Position, Loading, SwitchButton, Close, UploadFilled, Service, Star, StarFilled // 引入新图标
 } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElNotification } from 'element-plus'
 import { openClawChatStream, connectOpenClaw, getOpenClawHistory, getOpenClawConfigs, createAndConnectOpenClaw } from '@/api/openclaw'
 
 // --- API --- API ---
@@ -66,8 +66,17 @@ const chatFileInput = ref(null) // 文件输入框 ref
 const MAX_DIRECT_READ_SIZE_BYTES = 5 * 1024 * 1024
 
 const isSidebarCollapsed = ref(false)
+
+const toggleSidebar = () => {
+  isSidebarCollapsed.value = !isSidebarCollapsed.value
+}
+
 const inputMessage = ref('')
 const currentModel = ref('deepseek-chat')
+const currentModelDisplay = computed(() => {
+  const model = availableModels.value.find(m => m.model_name === currentModel.value)
+  return model ? model.display_name : currentModel.value
+})
 const enableSearch = ref(false)
 const showChatTree = ref(false) // 控制树状图弹窗显示
 const showConversationInstructions = ref(false)
@@ -75,15 +84,12 @@ const showConversationInstructions = ref(false)
 // --- 3. 会话管理 ---
 const showSettings = ref(false)
 const settingsActiveTab = ref('models')
-const availableModels = ref([
-  // 默认模型 (可以被后端数据覆盖或合并)
+const DEFAULT_MODELS = [
   { model_name: 'deepseek-chat', display_name: 'DeepSeek Chat' },
   { model_name: 'deepseek-chat-thinking', display_name: 'DeepSeek Chat Thinking' },
-  // { model_name: 'kimi-k2.5', display_name: 'Kimi-k2.5 多模态' },
-  // { model_name: 'kimi-k2-thinking', display_name: 'Kimi-k2 Thinking' },
-  // { model_name: 'qwen3-max', display_name: 'Qwen3 Max' },
+]
 
-])
+const availableModels = ref([...DEFAULT_MODELS])
 const newModelForm = reactive({ model_name: '', display_name: '' })
 
 const aiInstructionInput = ref('')
@@ -207,7 +213,11 @@ const selectOpenClawConfig = async (config) => {
   try {
     currentOpenClawConfig.value = config
     await connectOpenClawByConfig(config.id)
-    ElMessage.success(`已切换到配置: ${config.display_name}`)
+    ElNotification.success({
+      title: '切换成功',
+      message: `已切换到配置: ${config.display_name}`,
+      position: 'top-right'
+    })
     
     // 重新进入OpenClaw模式以加载新配置的历史记录
     if (isOpenClawMode.value) {
@@ -220,7 +230,11 @@ const selectOpenClawConfig = async (config) => {
 
 const handleSelectOpenClawConfig = async () => {
   if (!selectedConfigId.value) {
-    ElMessage.warning('请选择一个配置')
+    ElNotification.warning({
+      title: '提示',
+      message: '请选择一个配置',
+      position: 'top-right'
+    })
     return
   }
   
@@ -441,13 +455,7 @@ const fetchModelList = async () => {
     
     // 简单的合并策略：默认模型 + 自定义模型
     // 实际生产中可能希望完全由后端控制
-    const defaultModels = availableModels
-    // [
-    //   { model_name: 'deepseek-chat', display_name: 'DeepSeek Chat' },
-    //   { model_name: 'kimi-k2-thinking', display_name: 'Kimi-k2 Thinking' },
-    //   // { model_name: 'kimi-k2.5', display_name: 'Kimi-k2.5 多模态' },
-    //   // { model_name: 'qwen3-max', display_name: 'Qwen3 Max' },
-    // ]
+    const defaultModels = DEFAULT_MODELS
     
     // 过滤掉已经在 customModels 里的默认模型 (按 model_name)
     const existingNames = new Set(customModels.map(m => m.model_name))
@@ -474,14 +482,22 @@ const fetchInstructions = async () => {
 const handleAddInstruction = async () => {
   const content = (aiInstructionInput.value || '').trim()
   if (!content) {
-    ElMessage.warning('请输入指令内容')
+    ElNotification.warning({
+      title: '提示',
+      message: '请输入指令内容',
+      position: 'top-right'
+    })
     return
   }
   try {
     isInstructionSubmitting.value = true
     await createInstruction({ content })
     aiInstructionInput.value = ''
-    ElMessage.success('添加成功')
+    ElNotification.success({
+      title: '添加成功',
+      message: 'AI 指令已添加',
+      position: 'top-right'
+    })
     await fetchInstructions()
   } catch (error) {
     console.error('添加失败:', error)
@@ -493,7 +509,11 @@ const handleAddInstruction = async () => {
 const handleDeleteInstruction = async (row) => {
   try {
     await deleteInstruction(row.id)
-    ElMessage.success('删除成功')
+    ElNotification.success({
+      title: '删除成功',
+      message: '指令已删除',
+      position: 'top-right'
+    })
     await fetchInstructions()
   } catch (error) {
     console.error('删除失败:', error)
@@ -508,7 +528,11 @@ const moveInstructionUp = async (row) => {
   try {
     await updateInstruction(curr.id, { sort_order: prev.sort_order })
     await updateInstruction(prev.id, { sort_order: curr.sort_order })
-    ElMessage.success('排序已更新')
+    ElNotification.success({
+      title: '排序更新',
+      message: '指令排序已更新',
+      position: 'top-right'
+    })
     await fetchInstructions()
   } catch (error) {
     console.error('排序调整失败:', error)
@@ -523,7 +547,11 @@ const moveInstructionDown = async (row) => {
   try {
     await updateInstruction(curr.id, { sort_order: next.sort_order })
     await updateInstruction(next.id, { sort_order: curr.sort_order })
-    ElMessage.success('排序已更新')
+    ElNotification.success({
+      title: '排序更新',
+      message: '指令排序已更新',
+      position: 'top-right'
+    })
     await fetchInstructions()
   } catch (error) {
     console.error('排序调整失败:', error)
@@ -548,19 +576,31 @@ const fetchConversationInstructions = async () => {
 
 const handleAddConversationInstruction = async () => {
   if (!currentConversationId.value) {
-    ElMessage.warning('请先开始一次对话生成会话')
+    ElNotification.warning({
+      title: '提示',
+      message: '请先开始一次对话生成会话',
+      position: 'top-right'
+    })
     return
   }
   const content = (conversationInstructionInput.value || '').trim()
   if (!content) {
-    ElMessage.warning('请输入指令内容')
+    ElNotification.warning({
+      title: '提示',
+      message: '请输入指令内容',
+      position: 'top-right'
+    })
     return
   }
   try {
     isConversationInstructionSubmitting.value = true
     await createConversationInstruction(currentConversationId.value, { content })
     conversationInstructionInput.value = ''
-    ElMessage.success('添加成功')
+    ElNotification.success({
+      title: '添加成功',
+      message: '会话指令已添加',
+      position: 'top-right'
+    })
     await fetchConversationInstructions()
   } catch (error) {
     console.error('添加会话指令失败:', error)
@@ -573,7 +613,11 @@ const handleDeleteConversationInstruction = async (row) => {
   if (!currentConversationId.value) return
   try {
     await deleteConversationInstruction(currentConversationId.value, row.id)
-    ElMessage.success('删除成功')
+    ElNotification.success({
+      title: '删除成功',
+      message: '会话指令已删除',
+      position: 'top-right'
+    })
     await fetchConversationInstructions()
   } catch (error) {
     console.error('删除会话指令失败:', error)
@@ -589,7 +633,11 @@ const moveConversationInstructionUp = async (row) => {
   try {
     await updateConversationInstruction(currentConversationId.value, curr.id, { sort_order: prev.sort_order })
     await updateConversationInstruction(currentConversationId.value, prev.id, { sort_order: curr.sort_order })
-    ElMessage.success('排序已更新')
+    ElNotification.success({
+      title: '排序更新',
+      message: '会话指令排序已更新',
+      position: 'top-right'
+    })
     await fetchConversationInstructions()
   } catch (error) {
     console.error('排序调整失败:', error)
@@ -605,38 +653,63 @@ const moveConversationInstructionDown = async (row) => {
   try {
     await updateConversationInstruction(currentConversationId.value, curr.id, { sort_order: next.sort_order })
     await updateConversationInstruction(currentConversationId.value, next.id, { sort_order: curr.sort_order })
-    ElMessage.success('排序已更新')
+    ElNotification.success({
+      title: '排序更新',
+      message: '会话指令排序已更新',
+      position: 'top-right'
+    })
     await fetchConversationInstructions()
   } catch (error) {
     console.error('排序调整失败:', error)
   }
 }
 
+const isAddingModel = ref(false)
+
 const handleAddModel = async () => {
   if (!newModelForm.model_name || !newModelForm.display_name) {
-    ElMessage.warning('请填写完整信息')
+    ElNotification.warning({
+      title: '提示',
+      message: '请填写完整信息',
+      position: 'top-right'
+    })
     return
   }
   try {
+    isAddingModel.value = true
     await createModel(newModelForm)
-    ElMessage.success('添加成功')
+    ElNotification.success({
+      title: '添加成功',
+      message: '新模型已添加',
+      position: 'top-right'
+    })
     newModelForm.model_name = ''
     newModelForm.display_name = ''
     await fetchModelList()
   } catch (error) {
     // 已经在拦截器中处理了通用错误弹窗，这里可以仅记录日志或处理特定业务逻辑
     console.error('添加模型失败:', error)
+  } finally {
+    isAddingModel.value = false
   }
 }
 
 const handleDeleteModel = async (model) => {
   if (!model.is_custom) {
-    ElMessage.warning('默认模型不可删除')
+    ElNotification.warning({
+      title: '提示',
+      message: '默认模型不可删除',
+      position: 'top-right'
+    })
     return
   }
   try {
     await deleteModel(model.id)
-    ElMessage.success('删除成功')
+    ElNotification.success({
+      title: '删除成功',
+      message: '自定义模型已移除',
+      position: 'top-right'
+    })
     await fetchModelList()
     // 如果当前选中的是被删除的模型，重置为默认
     if (currentModel.value === model.model_name) {
@@ -645,6 +718,16 @@ const handleDeleteModel = async (model) => {
   } catch (error) {
     console.error('删除模型失败:', error)
   }
+}
+
+const handleModelChange = (cmd) => {
+  currentModel.value = cmd
+  ElNotification.info({
+    title: '模型已切换',
+    message: `当前模型：${currentModelDisplay.value}`,
+    position: 'top-right',
+    duration: 2000
+  })
 }
 
 const fetchSessionList = async () => {
@@ -756,7 +839,11 @@ const removeSession = async (e, id) => {
   e.stopPropagation()
   try {
     await deleteConversation(id)
-    ElMessage.success('删除成功')
+    ElNotification.success({
+      title: '删除成功',
+      message: '会话已删除',
+      position: 'top-right'
+    })
     await fetchSessionList()
     if (currentConversationId.value === id) {
       startNewChat()
@@ -768,7 +855,11 @@ const removeSession = async (e, id) => {
 
 const handleUpgradeAccount = async () => {
   if (!accountUpgradeForm.username) {
-    ElMessage.warning('请填写用户名')
+    ElNotification.warning({
+      title: '提示',
+      message: '请填写用户名',
+      position: 'top-right'
+    })
     return
   }
   try {
@@ -784,7 +875,11 @@ const handleUpgradeAccount = async () => {
     if (res.device_id) {
       localStorage.setItem('device_id', res.device_id)
     }
-    ElMessage.success('账号已升级')
+    ElNotification.success({
+      title: '升级成功',
+      message: '账号已升级',
+      position: 'top-right'
+    })
   } catch (error) {
     console.error('账号升级失败:', error)
   } finally {
@@ -794,7 +889,11 @@ const handleUpgradeAccount = async () => {
 
 const handleRecoverAccount = async () => {
   if (!accountRecoveryForm.username) {
-    ElMessage.warning('请填写用户名')
+    ElNotification.warning({
+      title: '提示',
+      message: '请填写用户名',
+      position: 'top-right'
+    })
     return
   }
   try {
@@ -810,7 +909,11 @@ const handleRecoverAccount = async () => {
     if (res.device_id) {
       localStorage.setItem('device_id', res.device_id)
     }
-    ElMessage.success('恢复成功')
+    ElNotification.success({
+      title: '恢复成功',
+      message: '账号已恢复',
+      position: 'top-right'
+    })
   } catch (error) {
     console.error('恢复账号失败:', error)
   } finally {
@@ -845,7 +948,11 @@ const handleLogout = () => {
     getOrCreateDeviceId()
   })
 
-  ElMessage.success('已注销，切换为随机访客身份')
+  ElNotification.success({
+    title: '注销成功',
+    message: '已注销，切换为随机访客身份',
+    position: 'top-right'
+  })
 }
 
 const taggedNodeIds = ref([]) // 存储被标记的节点 ID 列表
@@ -1267,7 +1374,11 @@ const handleTreeNodeClick = async (data) => {
     
     // 4. 关闭弹窗
     showChatTree.value = false
-    ElMessage.success('已切换到选中节点')
+    ElNotification.success({
+      title: '切换成功',
+      message: '已切换到选中节点',
+      position: 'top-right'
+    })
     
   } catch (error) {
     console.error('切换分支失败:', error)
@@ -1277,7 +1388,11 @@ const handleTreeNodeClick = async (data) => {
 // “继续聊天”按钮点击逻辑
 const handleContinueChat = async (msg) => {
   if (!msg.node_id) {
-    ElMessage.warning('该消息无法作为新的起点')
+    ElNotification.warning({
+      title: '提示',
+      message: '该消息无法作为新的起点',
+      position: 'top-right'
+    })
     return
   }
   // 复用 handleTreeNodeClick 的逻辑，它会获取路径并更新界面
@@ -1354,9 +1469,17 @@ const restoreChatPath = (leafNodeId) => {
 const handleCopy = async (text) => {
   try {
     await navigator.clipboard.writeText(text)
-    ElMessage.success('复制成功')
+    ElNotification.success({
+      title: '复制成功',
+      message: '内容已复制到剪贴板',
+      position: 'top-right'
+    })
   } catch (err) {
-    ElMessage.error('复制失败')
+    ElNotification.error({
+      title: '复制失败',
+      message: '请手动复制',
+      position: 'top-right'
+    })
   }
 }
 
@@ -1415,13 +1538,27 @@ const handleEnterKey = (e) => {
 }
 
 // ★★★ 发送消息核心逻辑 (改为流式调用) ★★★
+const handleToggleSearch = () => {
+  enableSearch.value = !enableSearch.value
+  ElNotification.info({
+    title: '设置已更改',
+    message: `联网搜索已${enableSearch.value ? '开启' : '关闭'}`,
+    position: 'top-right',
+    duration: 2000
+  })
+}
+
 const sendMessage = async () => {
   // 发送消息前确保设置弹窗关闭
   showConversationInstructions.value = false
   
   if (isOpenClawMode.value) {
     if (currentAttachments.value.length > 0) {
-      ElMessage.warning('OpenClaw 模式暂不支持附件')
+      ElNotification.warning({
+        title: '提示',
+        message: 'OpenClaw 模式暂不支持附件',
+        position: 'top-right'
+      })
       currentAttachments.value = []
     }
     await sendMessageToOpenClaw()
@@ -1664,7 +1801,11 @@ const handleFileChange = async (e) => {
   isUploading.value = true
   try {
     await uploadFile(formData)
-    ElMessage.success('上传成功')
+    ElNotification.success({
+      title: '上传成功',
+      message: '文件上传成功',
+      position: 'top-right'
+    })
     await fetchFileList()
   } catch (e) { console.error(e) } finally {
     isUploading.value = false
@@ -1679,7 +1820,11 @@ const handleDeleteKnowledgeFile = async (fileId) => {
     await deleteFile(fileId)
     selectedFileIds.value = selectedFileIds.value.filter(id => id !== fileId)
     await fetchFileList()
-    ElMessage.success('删除成功')
+    ElNotification.success({
+      title: '删除成功',
+      message: '知识库文件已删除',
+      position: 'top-right'
+    })
   } catch (e) {
     console.error('删除知识库文件失败:', e)
   }
@@ -1694,7 +1839,11 @@ const handleClearKnowledgeBase = async () => {
     await clearKnowledgeBase()
     selectedFileIds.value = []
     await fetchFileList()
-    ElMessage.success('知识库已清空')
+    ElNotification.success({
+      title: '清空成功',
+      message: '知识库已清空',
+      position: 'top-right'
+    })
   } catch (e) {
     console.error('清空知识库失败:', e)
   }
@@ -1742,9 +1891,17 @@ const processAttachment = (file) => {
         base64: base64Data,
         size: file.size
       })
-      ElMessage.success(`已添加附件：${file.name}`)
+      ElNotification.success({
+        title: '添加附件',
+        message: `已添加附件：${file.name}`,
+        position: 'top-right'
+      })
       if (file.size > MAX_DIRECT_READ_SIZE_BYTES) {
-        ElMessage.warning('附件超过 5MB：后端将自动使用检索模式提取相关片段')
+        ElNotification.warning({
+          title: '大文件提示',
+          message: '附件超过 5MB：后端将自动使用检索模式提取相关片段',
+          position: 'top-right'
+        })
       }
       resolve()
     }
@@ -1786,7 +1943,7 @@ const ensureSignedUrl = async (att) => {
     signedUrlTasks.set(att.id, task)
     return await task
   } catch (e) {
-    ElMessage.error('获取附件链接失败')
+    console.error('获取附件链接失败', e)
     return null
   } finally {
     signedUrlTasks.delete(att.id)
@@ -1950,7 +2107,7 @@ const handleOpenClawConfigCommand = (command) => {
             <div class="add-model-form">
               <el-input v-model="newModelForm.model_name" placeholder="模型ID (如 gpt-4)" style="margin-bottom: 10px" />
               <el-input v-model="newModelForm.display_name" placeholder="显示名称 (如 GPT-4)" style="margin-bottom: 10px" />
-              <el-button type="primary" @click="handleAddModel" style="width: 100%">添加</el-button>
+              <el-button type="primary" @click="handleAddModel" style="width: 100%" :loading="isAddingModel">添加</el-button>
             </div>
 
             <h3 style="margin-top: 20px">可用模型列表</h3>
@@ -2065,84 +2222,89 @@ const handleOpenClawConfigCommand = (command) => {
       <!-- 聊天主界面 -->
       <div v-else class="chat-container-wrapper">
         <header class="top-bar">
-          <template v-if="!isOpenClawMode">
-            <el-dropdown trigger="click" @command="(cmd) => currentModel = cmd">
-              <span class="model-name cursor-pointer">
-                {{ currentModel }}
-                <el-icon class="el-icon--right"><ArrowDown /></el-icon>
-              </span>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item v-for="model in availableModels" :key="model.model_name" :command="model.model_name">
-                    {{ model.display_name }}
-                  </el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-          </template>
-
-          <template v-else>
-            <el-dropdown trigger="click" @command="handleOpenClawConfigCommand" class="openclaw-config-dropdown">
-              <span class="model-name cursor-pointer">
-                {{ viewTitle }}
-                <el-icon class="el-icon--right"><ArrowDown /></el-icon>
-              </span>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item 
-                    v-for="config in openClawConfigs" 
-                    :key="config.id" 
-                    :command="{ type: 'select', config: config }"
-                    :class="{ 'is-active': currentOpenClawConfig?.id === config.id }"
-                  >
-                    <div class="config-dropdown-item">
-                      <div class="config-name">{{ config.display_name }}</div>
-                      <div class="config-url">{{ config.gateway_url }}</div>
-                    </div>
-                  </el-dropdown-item>
-                  <el-dropdown-item divided :command="{ type: 'manage' }">
-                    <el-icon><Setting /></el-icon> 管理配置
-                  </el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-          </template>
-        
-          <!-- 新增：聊天树按钮 -->
-          <el-button v-if="currentConversationId && !isOpenClawMode" circle @click="openChatTree" title="查看对话树" style="margin-right: 12px; margin-left: auto;">
-             <el-icon><Share /></el-icon>
-          </el-button>
-
-          <el-button v-if="!isOpenClawMode" circle @click="showConversationInstructions = true" title="会话指令" style="margin-right: 12px;">
-            <el-icon><Setting /></el-icon>
-          </el-button>
-
-          <!-- OpenClaw Button -->
-          <el-button circle @click="enterOpenClawMode" title="OpenClaw" style="margin-right: 12px;">
-             <el-icon><Service /></el-icon>
-          </el-button>
-
-          <el-button v-if="isOpenClawMode" @click="exitOpenClawMode" style="margin-right: 12px;">
-            退出
-          </el-button>
-
-          <!-- 用户头像下拉菜单 -->
-          <el-dropdown trigger="click" @command="(cmd) => cmd === 'logout' && handleLogout()">
-            <el-avatar 
-              :size="32" 
-              class="user-avatar cursor-pointer" 
-              :style="{ backgroundColor: currentUser.color, marginLeft: '12px' }"
-            >
-              {{ (currentUser.username?.[0] || 'U').toUpperCase() }}
-            </el-avatar>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="logout" style="color: #f56c6c;">
-                  <el-icon><SwitchButton /></el-icon> 注销
-                </el-dropdown-item>
-              </el-dropdown-menu>
+          <div class="header-left">
+            <template v-if="!isOpenClawMode">
+              <el-dropdown trigger="click" @command="handleModelChange">
+                <span class="model-name cursor-pointer">
+                  {{ currentModelDisplay }}
+                  <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+                </span>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item v-for="model in availableModels" :key="model.model_name" :command="model.model_name">
+                      {{ model.display_name }}
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
             </template>
-          </el-dropdown>
+
+            <template v-else>
+              <el-dropdown trigger="click" @command="handleOpenClawConfigCommand" class="openclaw-config-dropdown">
+                <span class="model-name cursor-pointer">
+                  {{ viewTitle }}
+                  <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+                </span>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item 
+                      v-for="config in openClawConfigs" 
+                      :key="config.id" 
+                      :command="{ type: 'select', config: config }"
+                      :class="{ 'is-active': currentOpenClawConfig?.id === config.id }"
+                    >
+                      <div class="config-dropdown-item">
+                        <div class="config-name">{{ config.display_name }}</div>
+                        <div class="config-url">{{ config.gateway_url }}</div>
+                      </div>
+                    </el-dropdown-item>
+                    <el-dropdown-item divided :command="{ type: 'manage' }">
+                      <el-icon><Setting /></el-icon> 管理配置
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </template>
+          </div>
+        
+          <div class="header-right">
+            <!-- 聊天树按钮 -->
+            <el-button v-if="currentConversationId && !isOpenClawMode" circle @click="openChatTree" title="查看对话树">
+               <el-icon><Share /></el-icon>
+            </el-button>
+
+            <!-- 会话指令按钮 -->
+            <el-button v-if="currentConversationId && !isOpenClawMode" circle @click="showConversationInstructions = true" title="会话指令">
+              <el-icon><Setting /></el-icon>
+            </el-button>
+
+            <el-button v-if="isOpenClawMode" @click="exitOpenClawMode">
+              退出
+            </el-button>
+
+            <!-- OpenClaw Button -->
+            <el-button circle @click="enterOpenClawMode" title="OpenClaw">
+               <el-icon><Service /></el-icon>
+            </el-button>
+
+            <!-- 用户头像下拉菜单 -->
+            <el-dropdown trigger="click" @command="(cmd) => cmd === 'logout' && handleLogout()" class="user-avatar-dropdown">
+              <el-avatar 
+                :size="32" 
+                class="user-avatar cursor-pointer" 
+                :style="{ backgroundColor: currentUser.color }"
+              >
+                {{ (currentUser.username?.[0] || 'U').toUpperCase() }}
+              </el-avatar>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="logout" style="color: #f56c6c;">
+                    <el-icon><SwitchButton /></el-icon> 注销
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </div>
         </header>
 
       <div class="content-scroll-area" ref="chatContainerRef" @scroll="handleScroll">
@@ -2322,7 +2484,7 @@ const handleOpenClawConfigCommand = (command) => {
             <!-- 右侧工具: 搜索、发送 -->
             <div class="toolbar-right">
               <el-tooltip effect="dark" :content="enableSearch ? '联网搜索: 开' : '联网搜索: 关'" placement="top">
-                <el-button circle link class="search-btn" :class="{ 'is-active': enableSearch }" :disabled="isOpenClawMode" @click="enableSearch = !enableSearch">
+                <el-button circle link class="search-btn" :class="{ 'is-active': enableSearch }" :disabled="isOpenClawMode" @click="handleToggleSearch">
                   <el-icon :size="18"><Connection /></el-icon>
                 </el-button>
               </el-tooltip>
@@ -2778,6 +2940,21 @@ $hover-color: #e3e3e3;
   display: flex;
   justify-content: space-between;
   align-items: center;
+
+  .header-left {
+    display: flex;
+    align-items: center;
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 20px; /* 增加操作按钮之间的间距，提供更好的视觉呼吸感 */
+    
+    .user-avatar-dropdown {
+      margin-left: 12px; /* 进一步拉开操作区与身份标识的距离，强调不同功能的逻辑分区 */
+    }
+  }
 
   .model-name {
     font-size: 16px;
@@ -3467,6 +3644,73 @@ $hover-color: #e3e3e3;
   .el-dropdown-menu__item.is-active {
     background-color: #ecf5ff;
     color: #409eff;
+  }
+}
+
+/* OpenClaw配置选择弹窗样式 */
+.openclaw-config-selection {
+  padding: 10px 0;
+
+  .config-radio-group {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+  }
+
+  .config-radio {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    height: auto; /* 覆盖默认高度 */
+    padding: 12px;
+    border: 1px solid #dcdfe6;
+    border-radius: 8px;
+    margin-right: 0; /* 覆盖 el-radio 默认 margin */
+    transition: all 0.3s;
+
+    &.is-checked {
+      border-color: #409eff;
+      background-color: #ecf5ff;
+    }
+
+    &:hover {
+      border-color: #c0c4cc;
+    }
+
+    /* 深度选择器调整 el-radio 内部布局 */
+    :deep(.el-radio__label) {
+      flex: 1;
+      width: 0; /* 配合 flex: 1 实现自适应 */
+      overflow: hidden; 
+      display: flex; 
+    }
+
+    .config-info {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      width: 100%;
+      
+      .config-name {
+        font-weight: 500;
+        font-size: 14px;
+        color: #303133;
+      }
+      
+      .config-url {
+        font-size: 12px;
+        color: #909399;
+        word-break: break-all;
+      }
+    }
+  }
+
+  .no-configs {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px 0;
   }
 }
 </style>

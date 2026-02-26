@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 from urllib.parse import urlparse
 from typing import AsyncGenerator, Dict, Optional
@@ -14,15 +15,13 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.models.sql_models import OpenClawConfig as OpenClawConfigModel
 from app.schemas.openclaw import OpenClawConfig as OpenClawConfigSchema, OpenClawConfigCreate, OpenClawConfigUpdate
-
-
-# 尝试引入 OpenClaw 适配器与配置
 try:
     from openclaw_webchat_adapter.ws_adapter import OpenClawChatWsAdapter
     from openclaw_webchat_adapter.config import AdapterSettings
 except ImportError:
-    OpenClawChatWsAdapter = None
+    logging.warn(f"openclaw服务缺少依赖 {ImportError.msg}")
     AdapterSettings = None
+    OpenClawChatWsAdapter = None
 
 # 尝试引入 SSHTunnel
 try:

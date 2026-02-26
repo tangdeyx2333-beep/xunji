@@ -3,7 +3,7 @@ import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/userStore'
 import { User, Lock } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElNotification } from 'element-plus'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -16,7 +16,11 @@ const loginForm = reactive({
 
 const handleLogin = async () => {
   if (!loginForm.username || !loginForm.password) {
-    ElMessage.warning('请输入用户名和密码')
+    ElNotification.warning({
+      title: '提示',
+      message: '请输入用户名和密码',
+      position: 'top-right'
+    })
     return
   }
   
@@ -26,10 +30,18 @@ const handleLogin = async () => {
   loading.value = false
 
   if (result.success) {
-    ElMessage.success('登录成功')
+    ElNotification.success({
+      title: '登录成功',
+      message: '欢迎回来',
+      position: 'top-right'
+    })
     router.push('/') // 跳转到主页 (Chat)
   } else {
-    ElMessage.error(result.message || '登录失败')
+    ElNotification.error({
+      title: '登录失败',
+      message: result.message || '请检查用户名和密码',
+      position: 'top-right'
+    })
   }
 }
 </script>

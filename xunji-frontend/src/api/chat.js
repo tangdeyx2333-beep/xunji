@@ -1,5 +1,5 @@
 import request from '@/utils/request'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElNotification } from 'element-plus'
 
 // // 保留原有的非流式方法（可选，或者删除）
 // export function chatWithModel(data) {
@@ -96,7 +96,13 @@ export async function chatStream(data, onMessage, onDone, onError, onMeta) {
     })
 
     if (!response.ok) {
-       if (response.status === 401) ElMessage.error('登录已过期')
+       if (response.status === 401) {
+         ElNotification.error({
+           title: '认证失败',
+           message: '登录已过期，请重新登录',
+           position: 'top-right'
+         })
+       }
        throw new Error(`HTTP error! status: ${response.status}`)
     }
 

@@ -33,8 +33,8 @@
       </el-table>
     </el-card>
 
-    <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑配置' : '新增配置'" width="50%">
-      <el-form :model="form" label-width="120px" ref="formRef">
+    <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑配置' : '新增配置'" width="520px">
+      <el-form :model="form" :rules="rules" label-width="120px" ref="formRef">
         <el-form-item label="显示名称" prop="displayName" required>
           <el-input v-model="form.displayName" />
         </el-form-item>
@@ -91,7 +91,7 @@
 
 <script setup>
 import { ref, onMounted } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElNotification } from 'element-plus';
 import { 
   getOpenClawConfigs, 
   createOpenClawConfig, 
@@ -106,6 +106,16 @@ const dialogVisible = ref(false);
 const isEdit = ref(false);
 const form = ref({});
 const formRef = ref(null);
+
+const rules = {
+  displayName: [{ required: true, message: '请输入显示名称', trigger: 'blur' }],
+  gatewayUrl: [{ required: true, message: '请输入网关地址', trigger: 'blur' }],
+  sessionKey: [{ required: true, message: '请输入会话 Key', trigger: 'blur' }],
+  sshHost: [{ required: true, message: '请输入 SSH 主机', trigger: 'blur' }],
+  sshPort: [{ required: true, message: '请输入 SSH 端口', trigger: 'blur' }],
+  sshUser: [{ required: true, message: '请输入 SSH 用户名', trigger: 'blur' }],
+  sshPassword: [{ required: true, message: '请输入 SSH 密码', trigger: 'blur' }]
+};
 
 const resetForm = () => {
   form.value = {
@@ -125,10 +135,15 @@ const resetForm = () => {
 
 const loadConfigs = async () => {
   try {
-    const response = await getOpenClawConfigs(userStore.userInfo.id);
-    configs.value = response.data;
+    const response = await getOpenClawConfigs(userStore.userInfo?.id);
+    // request.js 的响应拦截器已经返回了 response.data，所以这里直接赋值
+    configs.value = response || [];
   } catch (error) {
-    ElMessage.error('加载 OpenClaw 配置失败');
+    ElNotification.error({
+      title: '加载失败',
+      message: '加载 OpenClaw 配置失败',
+      position: 'top-right'
+    });
     console.error(error);
   }
 };
@@ -160,11 +175,19 @@ const handleEdit = (row) => {
 
 const handleDelete = async (id) => {
   try {
-    await deleteOpenClawConfig(id, userStore.userInfo.id);
-    ElMessage.success('删除成功');
+    await deleteOpenClawConfig(id, userStore.userInfo?.id);
+    ElNotification.success({
+      title: '删除成功',
+      message: '配置已移除',
+      position: 'top-right'
+    });
     await loadConfigs();
   } catch (error) {
-    ElMessage.error('删除失败');
+    ElNotification.error({
+      title: '删除失败',
+      message: '无法删除配置',
+      position: 'top-right'
+    });
     console.error(error);
   }
 };
@@ -186,19 +209,31 @@ const handleSubmit = async () => {
           ssh_user: form.value.sshUser,
           ssh_password: form.value.sshPassword,
           ssh_local_port: form.value.sshLocalPort,
-          user_id: userStore.userInfo.id
+          user_id: userStore.userInfo?.id
         };
         if (isEdit.value) {
           await updateOpenClawConfig(form.value.id, payload);
-          ElMessage.success('更新成功');
+          ElNotification.success({
+            title: '更新成功',
+            message: '配置已更新',
+            position: 'top-right'
+          });
         } else {
           await createOpenClawConfig(payload);
-          ElMessage.success('创建成功');
+          ElNotification.success({
+            title: '创建成功',
+            message: '新配置已添加',
+            position: 'top-right'
+          });
         }
         dialogVisible.value = false;
         await loadConfigs();
       } catch (error) {
-        ElMessage.error(isEdit.value ? '更新失败' : '创建失败');
+        ElNotification.error({
+          title: isEdit.value ? '更新失败' : '创建失败',
+          message: '操作未能完成',
+          position: 'top-right'
+        });
         console.error(error);
       }
     }

@@ -3,7 +3,7 @@ import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { register } from '@/api/auth' // 直接调 API 简单点
 import { User, Lock, Message } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElNotification } from 'element-plus'
 
 const router = useRouter()
 const loading = ref(false)
@@ -16,14 +16,23 @@ const form = reactive({
 
 const handleRegister = async () => {
   if (!form.username || !form.password) {
-    return ElMessage.warning('请填写必填项')
+    ElNotification.warning({
+      title: '提示',
+      message: '请填写用户名和密码',
+      position: 'top-right'
+    })
+    return
   }
 
   loading.value = true
   try {
     // 调用后端注册接口
     await register(form)
-    ElMessage.success('注册成功，请登录')
+    ElNotification.success({
+      title: '注册成功',
+      message: '请登录您的账号',
+      position: 'top-right'
+    })
     router.push('/login') // 注册完跳去登录
   } catch (err) {
     // 错误已经在 request.js 里拦截提示了，这里不用处理

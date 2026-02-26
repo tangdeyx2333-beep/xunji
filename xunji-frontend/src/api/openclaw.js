@@ -1,5 +1,5 @@
 import request from '@/utils/request'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElNotification } from 'element-plus'
 
 /**
  * 获取用户的所有 OpenClaw 配置
@@ -120,7 +120,13 @@ export async function openClawChatStream(data, onMessage, onDone, onError) {
     })
 
     if (!response.ok) {
-       if (response.status === 401) ElMessage.error('登录已过期')
+       if (response.status === 401) {
+         ElNotification.error({
+           title: '认证失败',
+           message: '登录已过期，请重新登录',
+           position: 'top-right'
+         })
+       }
        // 读取错误信息
        try {
          const errJson = await response.json()

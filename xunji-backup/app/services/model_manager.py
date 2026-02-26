@@ -1,3 +1,4 @@
+import logging
 import os
 from typing import Dict, Any, Optional
 from dotenv import load_dotenv
@@ -6,6 +7,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 
 load_dotenv()
+_logger = logging.getLogger(__name__)
 
 class ModelManager:
     _instance = None
@@ -61,11 +63,13 @@ class ModelManager:
                     model="deepseek-reasoner",
                     api_key=os.getenv("DEEPSEEK_API_KEY"),
                     base_url=os.getenv("DEEPSEEK_API_BASE"),
+                    temperature=0  # 设置温度为 0
                 )
             return ChatOpenAI(
                 model=model_name,
                 api_key=os.getenv("DEEPSEEK_API_KEY"),
                 base_url=os.getenv("DEEPSEEK_API_BASE"),
+                temperature=0.4  # 设置温度为 0
             )
             
         elif model_name.startswith("llm") or model_name.startswith("llama") or model_name.startswith("ollama"):
@@ -85,6 +89,17 @@ class ModelManager:
             )
             
         elif model_name.startswith("kimi") or model_name.startswith("moonshot"):
+            if "thinking" in model_name.lower() in model_name.lower():
+                return ChatOpenAI(
+                    model="kimi-k2.5",
+                    api_key=os.getenv("MOONSHOT_API_KEY"),
+                    base_url=os.getenv("MOONSHOT_BASE_URL"),
+                    model_kwargs={
+                        "extra_body": {
+                            "thinking": {"type": "enabled"}
+                        }
+                    },
+                )
             # Kimi (Moonshot AI) 兼容 OpenAI 接口
             return ChatOpenAI(
                 model=model_name,
@@ -102,8 +117,8 @@ class ModelManager:
 
         else:
             # 默认兜底模型
-            print(f"Warning: Unknown model '{model_name}', falling back to default.")
-            return ChatOllama(model="llama3.2:1b", base_url="http://localhost:11434")
+            _logger.warning(f"Warning: Unknown model '{model_name}', falling back to default.")
+            raise RuntimeError(f"模型不存在model: {model_name}")
 
 # 创建全局单例
 model_manager = ModelManager()
