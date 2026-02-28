@@ -1,10 +1,15 @@
 import os
 import sys
 import time
+import logging
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+# 配置日志
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
 
 from app.api.endpoints import chat, upload, retrieval, history, auth, models, attachments, instructions, openclaw
 from app.db.session import init_db

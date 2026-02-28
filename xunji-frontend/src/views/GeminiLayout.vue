@@ -7,7 +7,7 @@ import {
   Compass, DataLine, Trophy, Collection,
   Connection,
   Document, Paperclip, ArrowDown, Delete,
-  Share, CopyDocument, Position, Loading, SwitchButton, Close, UploadFilled, Service, Star, StarFilled // 引入新图标
+  Share, CopyDocument, Position, Loading, SwitchButton, Close, UploadFilled, Service, Star, StarFilled, MagicStick // 引入新图标
 } from '@element-plus/icons-vue'
 import { ElMessage, ElNotification } from 'element-plus'
 import { openClawChatStream, connectOpenClaw, getOpenClawHistory, getOpenClawConfigs, createAndConnectOpenClaw } from '@/api/openclaw'
@@ -72,6 +72,7 @@ const toggleSidebar = () => {
 }
 
 const inputMessage = ref('')
+const chatPrefix = ref('') // ★ 新增：聊天前缀
 const currentModel = ref('deepseek-chat')
 const currentModelDisplay = computed(() => {
   const model = availableModels.value.find(m => m.model_name === currentModel.value)
@@ -351,7 +352,11 @@ const exitOpenClawMode = async () => {
 }
 
 const sendMessageToOpenClaw = async () => {
-  const text = inputMessage.value.trim()
+  let text = inputMessage.value.trim()
+  if (chatPrefix.value && text) {
+    text = `${chatPrefix.value}\n${text}`
+  }
+
   if (!text || openClawState.isSending) return
 
   openClawState.messages.push({ role: 'user', content: text, loading: false, done: true })
@@ -1565,8 +1570,13 @@ const sendMessage = async () => {
     return
   }
 
-  const text = inputMessage.value.trim()
   const attachmentsSnapshot = [...currentAttachments.value]
+  
+  let text = inputMessage.value.trim()
+  if (chatPrefix.value && text) {
+    text = `${chatPrefix.value}\n${text}`
+  }
+
   if (!text && attachmentsSnapshot.length === 0) return
 
   // --- 1. 确定当前操作的会话上下文 ---
@@ -2479,6 +2489,29 @@ const handleOpenClawConfigCommand = (command) => {
                   <el-icon :size="20"><Paperclip /></el-icon>
                 </el-button>
               </el-tooltip>
+
+              <!-- ★ 新增：聊天前缀设置 ★ -->
+              <el-popover placement="top" :width="250" trigger="click">
+                <template #reference>
+                  <el-button circle link class="action-btn" :class="{ 'is-active': !!chatPrefix }" title="设置聊天前缀">
+                    <el-icon :size="20"><MagicStick /></el-icon>
+                  </el-button>
+                </template>
+                <div class="prefix-settings">
+                  <div class="popover-title" style="margin-bottom: 8px; font-weight: bold;">聊天前缀设置</div>
+                  <el-input 
+                    v-model="chatPrefix" 
+                    placeholder="输入前缀 (例如: 请帮我翻译)" 
+                    size="small"
+                    clearable
+                    type="textarea"
+                    :rows="2"
+                  />
+                  <div class="popover-desc" style="font-size: 12px; color: #888; margin-top: 8px;">
+                    设置后，发送的每一条消息都会自动加上此前缀。
+                  </div>
+                </div>
+              </el-popover>
             </div>
 
             <!-- 右侧工具: 搜索、发送 -->
@@ -3327,7 +3360,7 @@ $hover-color: #e3e3e3;
       width: 36px;
       height: 36px;
 
-      &.has-files {
+      &.has-files, &.is-active {
         color: #4285f4;
         background-color: #e8f0fe;
       }

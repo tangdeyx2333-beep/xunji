@@ -1,5 +1,6 @@
 import json
-import base64
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse  # ★ 引入流式响应
 from sqlalchemy.orm import Session
@@ -16,6 +17,7 @@ from app.services.object_storage import object_storage
 from app.services.attachment_service import save_chat_attachments
 
 router = APIRouter()
+_logger = logging.getLogger(__name__)
 
 
 async def chat_response_generator(
@@ -24,6 +26,7 @@ async def chat_response_generator(
     db: Session,
     user_node: TreeNode,
     user_message: Message,
+    user_message_id: str | None = None,
     is_new_conversation: bool,
 ):
     full_ai_response = ""
@@ -60,7 +63,7 @@ async def chat_response_generator(
         files=request.files,
         user_id=request.user_id,
         conversation_id=request.conversation_id,
-        message_id=user_message.id,
+        message_id=user_message_id or user_message.id,
     )
     if saved_attachments:
         yield f"data: {json.dumps({'user_attachments_saved': saved_attachments})}\n\n"
@@ -73,7 +76,7 @@ async def chat_response_generator(
             # 检查消息数量，每 10 条消息（约 5 轮）重新生成一次
             # 注意：这里的 db 是当前请求的 session，可以直接用
             msg_count = db.query(Message).filter(Message.conversation_id == request.conversation_id).count()
-            print("msg_count ", msg_count)
+            _logger.info(f"msg_count {msg_count}")
             if msg_count > 0 and msg_count % 10 == 0:
                 should_generate_title = True
         except Exception as e:
@@ -139,6 +142,7 @@ async def chat_endpoint(
         content=request.message
     )
     db.add(user_message)
+    user_message_id = user_message.id
     
     # ★ 新增：创建树节点（用户）
     user_node = TreeNode(
@@ -159,6 +163,7 @@ async def chat_endpoint(
             db=db,
             user_node=user_node,
             user_message=user_message,
+            user_message_id=user_message_id,
             is_new_conversation=is_new_conversation,
         ),
         media_type="text/event-stream"

@@ -1,6 +1,18 @@
 <template>
   <div class="openclaw-settings">
-    <h2>OpenClaw 连接配置</h2>
+    <div class="header-section">
+      <h2>OpenClaw 连接配置</h2>
+      <el-tag type="info" class="version-tag">支持版本: openclaw@2026.2.4 及之前</el-tag>
+    </div>
+
+    <el-alert
+      title="版本支持说明"
+      type="info"
+      description="目前已验证支持 openclaw@2026.2.4 及其更早版本的服务。更新版本的适配正在开发中，如有连接问题请确认服务端版本。"
+      show-icon
+      :closable="false"
+      class="version-alert"
+    />
 
     <el-card class="box-card">
       <template #header>
@@ -34,6 +46,10 @@
     </el-card>
 
     <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑配置' : '新增配置'" width="520px">
+      <div class="dialog-tip" style="margin-bottom: 15px; font-size: 13px; color: #666;">
+        <el-icon style="vertical-align: middle; margin-right: 4px;"><InfoFilled /></el-icon>
+        支持 openclaw@2026.2.4 及更早版本
+      </div>
       <el-form :model="form" :rules="rules" label-width="120px" ref="formRef">
         <el-form-item label="显示名称" prop="displayName" required>
           <el-input v-model="form.displayName" />
@@ -92,6 +108,7 @@
 <script setup>
 import { ref, onMounted } from 'vue';
 import { ElNotification } from 'element-plus';
+import { InfoFilled } from '@element-plus/icons-vue';
 import { 
   getOpenClawConfigs, 
   createOpenClawConfig, 
@@ -248,6 +265,21 @@ onMounted(() => {
 <style scoped>
 .openclaw-settings {
   padding: 20px;
+}
+.header-section {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  margin-bottom: 5px;
+}
+.header-section h2 {
+  margin: 0;
+}
+.version-tag {
+  font-weight: 500;
+}
+.version-alert {
+  margin-bottom: 20px;
 }
 .card-header {
   display: flex;

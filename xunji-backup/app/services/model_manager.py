@@ -2,6 +2,7 @@ import logging
 import os
 from typing import Dict, Any, Optional
 from dotenv import load_dotenv
+from fastapi import logger
 from langchain_community.chat_models import ChatOllama
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
@@ -59,6 +60,7 @@ class ModelManager:
             
         elif model_name.startswith("deepseek"):
             if "thinking" in model_name.lower() or "reasoner" in model_name.lower():
+                _logger.info("Deepseek Using Thinking model")
                 return ChatOpenAI(
                     model="deepseek-reasoner",
                     api_key=os.getenv("DEEPSEEK_API_KEY"),
@@ -90,6 +92,7 @@ class ModelManager:
             
         elif model_name.startswith("kimi") or model_name.startswith("moonshot"):
             if "thinking" in model_name.lower() in model_name.lower():
+                _logger.info("Kimi Using Thinking model")
                 return ChatOpenAI(
                     model="kimi-k2.5",
                     api_key=os.getenv("MOONSHOT_API_KEY"),
