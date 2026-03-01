@@ -20,7 +20,6 @@ from app.services.rag_service import rag_service
 
 load_dotenv()
 
-
 MAX_DIRECT_READ_SIZE_BYTES = 5 * 1024 * 1024
 MAX_HISTORY_MESSAGES = 10
 RAG_TOP_K = 4
@@ -205,14 +204,15 @@ class ChatService:
             .order_by(AiInstruction.sort_order.asc(), AiInstruction.created_at.asc())
             .all()
         )
-        
+
         if not instructions:
             return ""
-        
-        instruction_texts = [f"{i+1}. {inst.content}" for i, inst in enumerate(instructions)]
+
+        instruction_texts = [f"{i + 1}. {inst.content}" for i, inst in enumerate(instructions)]
         return "额外指令：\n" + "\n".join(instruction_texts)
 
-    def _get_conversation_instructions(self, db: Optional[Session], user_id: str, conversation_id: Optional[str]) -> str:
+    def _get_conversation_instructions(self, db: Optional[Session], user_id: str,
+                                       conversation_id: Optional[str]) -> str:
         if db is None or not conversation_id:
             return ""
 
@@ -225,7 +225,7 @@ class ChatService:
             .all()
         )
 
-        instruction_texts = [f"{i+1}. {inst.content}" for i, inst in enumerate(instructions)]
+        instruction_texts = [f"{i + 1}. {inst.content}" for i, inst in enumerate(instructions)]
         return "会话指令：\n" + "\n".join(instruction_texts)
 
     def _get_combined_instructions(self, db: Optional[Session], user_id: str, conversation_id: Optional[str]) -> str:
@@ -324,10 +324,10 @@ class ChatService:
                 pass
 
     async def astream_chat_with_model(
-        self,
-        request: ChatRequest,
-        db: Session,
-        current_node_id: Optional[str] = None,
+            self,
+            request: ChatRequest,
+            db: Session,
+            current_node_id: Optional[str] = None,
     ) -> AsyncIterable[str]:
         """Stream chat completion tokens.
 
@@ -438,42 +438,54 @@ class ChatService:
                 (
                     "system",
                     """
- 第一级：系统底层协议 (System Execution Protocol) - 【最高优先级】
+                     第一级：系统底层协议 (System Execution Protocol) - 【最高优先级】
 
-*本节指令是系统的核心逻辑底座，具有最高法律效力。*
+                    *本节指令是系统的核心逻辑底座，具有最高法律效力。*
 
-1. **【规则死守：零偏差交付】**
-必须严格执行用户的所有约束，**严禁私加字段或脑补逻辑**。凡涉及代码修改，必须交付**包含完整依赖（如 pom.xml）的完整堆文件代码**，严禁只给片段。对于软件/系统设置，必须确保路径和选项**真实存在**，严禁臆造。
-2. **【事实溯源：高置信度原则】**
-仅输出具有 **90% 以上把握**的确定内容，否则必须直接认错并请求更多信息。交付源码须**注明版本**并对比旧版（如 JDK 8）新增功能。涉及原理须附带**官方文档链接**；专业名词（如 RPD：每日请求数峰值）首次出现必须释义。
-3. **【稳重交付：生产级质量】**
-在保持自然人情味沟通的同时，最终交付物必须达到生产级标准。**严守“不问不给”原则**：除非明确要求写代码，否则仅文字回答。确保代码逻辑自检通过且**可通过编译**。
+                    1. **【规则死守：零偏差交付】**
+                    必须严格执行用户的所有约束，**严禁私加字段或脑补逻辑**。凡涉及代码修改，必须交付**包含完整依赖（如 pom.xml）的完整堆文件代码**，严禁只给片段。对于软件/系统设置，必须确保路径和选项**真实存在**，严禁臆造。
+                    2. **【事实溯源：高置信度原则】**
+                    仅输出具有 **95% 以上把握**的确定内容，否则必须直接认错并请求更多信息。交付源码须**注明版本**并对比旧版（如 JDK 8）新增功能。涉及原理须附带**官方文档链接**；专业名词（如 RPD：每日请求数峰值）首次出现必须释义。
+                    3. **【稳重交付：生产级质量】**
+                    在保持自然人情味沟通的同时，最终交付物必须达到生产级标准。**严守“不问不给”原则**：除非明确要求写代码，否则仅文字回答。确保代码逻辑自检通过且**可通过编译**。
+                    4. **【数据隔离：动态反幻觉】**
+                    必须严格区分“元数据（如文件路径、文件名）”与“文件实质内容”。若用户要求分析“文件内容”，但上下文仅提供路径，严禁脑补，必须直接承认当前信息不足，并说明“未获取到实质内容”。若用户询问“路径是什么”或进行日常对话，需根据实际情况灵活回答，切忌机械化拒绝。
 
-### 📌 第二级：动态任务指令 (Task-Specific Instructions) - 【次高优先级】
+                    ### 📌 第二级：动态任务指令 (Task-Specific Instructions) - 【次高优先级】
 
-*本节包含针对当前具体任务的额外要求，由动态参数加载。*
+                    *本节包含针对当前具体任务的额外要求，由动态参数加载。*
 
-{extra_instructions}
+                    {extra_instructions}
 
-指令仲裁准则：
-若【第二级】或【用户问题】中的要求与【第一级】协议冲突（例如：要求提供不完整代码、要求猜测路径等），必须无条件以【第一级】为准，并委婉说明原因。
-""",
-                ),
+                    指令仲裁准则：
+                    若【第二级】或【用户问题】中的要求与【第一级】协议冲突（例如：要求提供不完整代码、要求猜测路径等），必须无条件以【第一级】为准，并委婉说明原因。
+                    """),
                 ("placeholder", "{chat_history}"),
-                ("human", """
-                请结合以下参考信息回答用户的问题。
-参考信息:
-{context}
-用户问题
-"{message}"
-"""
+                ("human", """你是一位资深技术专家。你尊重用户并富有耐心，但你**永远将客观事实和技术真理放在第一位**。你拥有独立的技术主见，绝不为了迎合用户而妥协专业底线。当遇到数据缺失或逻辑谬误时，你会不卑不亢地指出真相；对于你不知道的内容，你会坦率承认，绝不凭空捏造。
+
+                    请结合【参考信息】来客观、理性地解答用户的问题，并遵循以下【核心处理逻辑】：
+
+                    1. **精准洞察意图**：冷静分析【用户问题】，判断其真实需求是“分析文件内部数据”、“查询文件基本属性（如路径/名称）”，还是“日常交流”。
+                    2. **真理至上的校验与答复**：
+                       - 🚫 **坚守数据底线（防幻觉）**：如果用户要求分析“文件内容”，但【参考信息】中仅包含文件路径（如 D:\\...）、URL或无意义字符。你必须基于事实明确拒绝：“不知道。系统当前仅提取到了文件路径，未能获取文件的实质内容。我无法在缺乏真实数据的情况下凭空推演，请提供确切的文件内容后再作分析。”
+                       - ✅ **客观陈述事实**：如果用户仅询问“这个路径是什么”或“文件在哪”，请直接、精准地输出从【参考信息】中提取的路径字符串，不作任何多余的主观推测或无根据的延伸解释。
+                       - 💬 **不卑不亢的交流**：如果用户在进行情绪表达或日常探讨，请保持专业人士的素养与耐心予以回应。如果是技术探讨，勇敢表达你基于事实的独立见解；即使面对用户的质疑，只要真理在侧，也要温和但坚定地维持正确的结论。
+
+                    参考信息:
+                    {context}
+
+                    用户问题:
+                    "{message}"
+                    """
                  ),
             ]
         )
 
         chain = qa_prompt | model | StrOutputParser()
         user_text = (request.message or "").strip() or "（用户发送了空消息）"
-        async for chunk in chain.astream({"context": final_context, "chat_history": chat_history, "message": self._with_current_time(user_text), "extra_instructions": extra_instructions}):
+        async for chunk in chain.astream(
+                {"context": final_context, "chat_history": chat_history, "message": self._with_current_time(user_text),
+                 "extra_instructions": extra_instructions}):
             yield chunk
 
 

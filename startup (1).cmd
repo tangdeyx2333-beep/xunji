@@ -18,7 +18,7 @@ type nul > "%LOG_FILE%"
 echo Starting Backend...
 :: 启动一个独立的 PowerShell 窗口来运行后端服务
 :: 日志会同时显示在窗口中并附加到日志文件
-start "Backend Server" powershell -Command "& { cd xunji-backup; uvicorn app.main:app --host 0.0.0.0 --port 21801 | Tee-Object -FilePath logs\backend_%LOG_DATE%.log -Append }"
+start "Backend Server" powershell -Command "& { cd xunji-backup; uvicorn app.main:app --host 127.0.0.1 --port 21801 | Tee-Object -FilePath logs\backend_%LOG_DATE%.log -Append }"
 
 :: 4. 启动前端
 echo Starting Frontend...

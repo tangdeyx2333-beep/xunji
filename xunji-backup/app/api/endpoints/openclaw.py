@@ -270,7 +270,12 @@ async def connect_openclaw(request: OpenClawConnectExistingRequest, db: Session 
                 
                 # 更新网关 URL 指向本地隧道端口
                 local_port = tunnel.local_bind_port
-                final_gateway_url = f"{parsed_url.scheme}://127.0.0.1:{local_port}{parsed_url.path}"
+                if parsed_url.scheme:
+                    final_gateway_url = f"{parsed_url.scheme}://127.0.0.1:{local_port}{parsed_url.path}"
+                    if parsed_url.query:
+                        final_gateway_url = f"{final_gateway_url}?{parsed_url.query}"
+                else:
+                    final_gateway_url = f"127.0.0.1:{local_port}"
                 print(f"SSH Tunnel established for config {request.config_id}: 127.0.0.1:{local_port} -> {config.ssh_host} -> 127.0.0.1:{remote_port}")
             
             except Exception as e:
@@ -291,6 +296,8 @@ async def connect_openclaw(request: OpenClawConnectExistingRequest, db: Session 
 
         # 4. 建立 OpenClaw 连接
         try:
+            if "://" not in final_gateway_url:
+                final_gateway_url = f"ws://{final_gateway_url}"
             settings = AdapterSettings(
                 url=final_gateway_url,
                 token=config.gateway_token,
@@ -298,7 +305,7 @@ async def connect_openclaw(request: OpenClawConnectExistingRequest, db: Session 
                 session_key=config.session_key
             )
             
-            adapter = OpenClawChatWsAdapter.create_connected(settings=settings)
+            adapter = await asyncio.to_thread(OpenClawChatWsAdapter.create_connected, settings=settings)
             
         except Exception as e:
             # 如果连接失败，且建立了隧道，需要关闭隧道
@@ -369,15 +376,22 @@ async def _get_adapter_for_config(config_id: str, db: Session) -> Optional["Open
             )
             tunnel.start()
             local_port = tunnel.local_bind_port
-            final_gateway_url = f"{parsed_url.scheme}://127.0.0.1:{local_port}{parsed_url.path}"
+            if parsed_url.scheme:
+                final_gateway_url = f"{parsed_url.scheme}://127.0.0.1:{local_port}{parsed_url.path}"
+                if parsed_url.query:
+                    final_gateway_url = f"{final_gateway_url}?{parsed_url.query}"
+            else:
+                final_gateway_url = f"127.0.0.1:{local_port}"
         
+        if "://" not in final_gateway_url:
+            final_gateway_url = f"ws://{final_gateway_url}"
         settings = AdapterSettings(
             url=final_gateway_url,
             token=config.gateway_token,
             password=config.gateway_password,
             session_key=config.session_key
         )
-        adapter = OpenClawChatWsAdapter.create_connected(settings=settings)
+        adapter = await asyncio.to_thread(OpenClawChatWsAdapter.create_connected, settings=settings)
         
         # 缓存
         active_connections[config_id] = adapter
