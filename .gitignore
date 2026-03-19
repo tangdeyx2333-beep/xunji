@@ -251,3 +251,15 @@ xunji-backup/database/
 # 忽略前端依赖（极其重要）
 node_modules/
 xunji-frontend/node_modules/
+
+
+# 忽略整个向量数据库数据目录
+vector_store/
+
+# 忽略 JetBrains/IDE 配置文件
+.idea/
+
+# 忽略所有的 Python 编译缓存目录和文件
+__pycache__/
+*.pyc
+*.pyo

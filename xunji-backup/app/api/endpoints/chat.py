@@ -12,8 +12,6 @@ from app.schemas.chat import ChatRequest
 from app.services.chat_services import chat_service
 from app.services.title_generator import title_generator # ★ 引入标题生成服务
 from app.db.session import SessionLocal # 引入 SessionLocal 用于后台任务
-from app.core import config
-from app.services.object_storage import object_storage
 from app.services.attachment_service import save_chat_attachments
 
 router = APIRouter()

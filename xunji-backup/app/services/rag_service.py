@@ -194,7 +194,7 @@ class RagService:
             for doc in split_docs:
                 doc.metadata["file_id"] = file_id
                 doc.metadata["filename"] = filename
-            if split_docs:
+            if split_docs:      
                 self._get_vector_store().add_documents(split_docs)
             return file_id
         finally:
